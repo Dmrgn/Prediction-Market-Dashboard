@@ -11,6 +11,8 @@ class Market(BaseModel):
     title: str
     description: Optional[str] = None
     category: Optional[str] = None
+    sector: Optional[str] = None  # Normalized: Sports, Politics, Crypto, etc.
+    tags: List[str] = []  # Source tags for filtering/search
     ticker: Optional[str] = None
     source: Literal["polymarket", "kalshi"]
     source_id: str

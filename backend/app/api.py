@@ -1,7 +1,7 @@
 import asyncio
 import time
 from typing import List, Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
 from .state import StateManager
 from .schemas import Market, OrderBook, QuotePoint
 
@@ -15,17 +15,24 @@ router = APIRouter()
 state = StateManager()
 
 @router.get("/markets", response_model=List[Market])
-async def list_markets(source: Optional[str] = None, q: Optional[str] = None):
+async def list_markets(request: Request, source: Optional[str] = None, q: Optional[str] = None):
+    """
+    List/search markets (legacy endpoint, use /markets/search for advanced features).
+    """
     markets = state.get_all_markets()
+    
     if source:
         markets = [m for m in markets if m.source == source]
+    
     if q:
         q_lower = q.lower()
-        # Search in Title OR any Outcome Name
         markets = [
             m for m in markets 
-            if q_lower in m.title.lower() or any(q_lower in o.name.lower() for o in m.outcomes)
+            if q_lower in m.title.lower() 
+            or (m.description and q_lower in m.description.lower())
+            or any(q_lower in o.name.lower() for o in m.outcomes)
         ]
+    
     return markets
 
 @router.get("/markets/{market_id}", response_model=Market)
@@ -93,93 +100,42 @@ class ConnectionManager:
             except:
                 pass 
 
+# Instantiate manager for export
 manager = ConnectionManager()
+
+from .manager import SubscriptionManager
+import json
+
+# ...
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+    sub_manager = SubscriptionManager()
+    # Accept connection
+    # Note: SubscriptionManager logic in `subscribe` adds to set.
+    # We should perform handshake/accept here? sub_manager.subscribe doesn't accept(), it assumes open.
+    await websocket.accept()
+    
     try:
         while True:
-            # Wait for messages (subscribe, etc.)
-            # For hackathon MVP, we just broadcast everything to everyone once connected
-            # or we can implement basic subscribe logic if time permits.
-            # Client sends: {"op": "subscribe"}
+            # Client must send {"op": "subscribe", "market_id": "..."}
+            # Or {"op": "unsubscribe", "market_id": "..."}
             data = await websocket.receive_json()
-            # We can log subscriptions here
+            op = data.get("op")
             
-            # Keep connection open
-            pass
+            if op == "subscribe":
+                pass
+                
+            elif op == "subscribe_market":
+                market_id = data.get("market_id")
+                if market_id:
+                    await sub_manager.subscribe(market_id, websocket)
+            
+            elif op == "unsubscribe_market":
+                market_id = data.get("market_id")
+                if market_id:
+                    await sub_manager.unsubscribe(market_id, websocket)
+                    
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        await sub_manager.unsubscribe_from_all(websocket)
 
-# Background Broadcast Loop
-# We need a way to send updates from State to Websockets.
-# Option: StateManager gets a reference to ConnectionManager?
-# Or we poll StateManager for changes? 
-# Better: StateManager calls a callback. 
-# For Hackathon: let's patch StateManager to call manager.broadcast
-
-async def broadcast_worker():
-    # Hack: Monkey patch or just checking state?
-    # Actually, StateManager shouldn't depend on API.
-    # Let's make StateManager have an async callback list.
-    pass
-
-
-from news.fetcher import news_fetcher, Article
-from news.rank import rank_articles
-
-@router.get("/news/search", response_model=List[Article])
-def search_news(
-    q: str = Query(..., description="Search query"),
-    providers: Optional[List[str]] = Query(
-        None, description="Providers to query"
-    ),
-    limit: int = Query(20, ge=1, le=100),
-    stream: bool = Query(False, description="Stream results as they arrive"),
-):
-    """
-    Called when the user presses Enter in the search bar.
-    Expected Request shape:
-    GET /news/search?q=inflation&providers=newsapi&providers=gnews&limit=25
-    
-    Returns ranked, deduplicated articles from all providers.
-    """
-    
-    selected_providers = providers or news_fetcher.available_providers()
-
-    if stream:
-        def event_stream():
-            aggregated: List[Article] = []
-            last_ranked: List[Article] = []
-
-            for provider, result in news_fetcher.fetch_multiple_iter(
-                providers=selected_providers,
-                query=q,
-                limit=limit,
-            ):
-                if result:
-                    aggregated.extend(result)
-
-                last_ranked = rank_articles(aggregated, dedupe=True, limit=limit)
-                payload = {
-                    "provider": provider,
-                    "articles": last_ranked,
-                }
-                yield f"event: update\ndata: {json.dumps(payload)}\n\n"
-
-            yield f"event: done\ndata: {json.dumps({'articles': last_ranked})}\n\n"
-
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-    # Fetch from all providers in parallel (blocking)
-    raw_articles = news_fetcher.fetch_multiple(
-        providers=selected_providers,
-        query=q,
-        limit=limit,
-    )
-
-    # Rank, dedupe, and limit results
-    ranked = rank_articles(raw_articles, dedupe=True, limit=limit)
-
-    return ranked

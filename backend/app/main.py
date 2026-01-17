@@ -26,42 +26,64 @@ async def lifespan(app: FastAPI):
     poly_connector = PolymarketConnector(state)
     kalshi_connector = KalshiConnector(state)
     
-    # Initial fetch
-    print("Fetching initial markets...")
-    await poly_connector.fetch_initial_markets()
-    await kalshi_connector.fetch_initial_markets()
-    print("Market fetch complete.")
+    # Expose connectors to app state for API access
+    app.state.poly = poly_connector
+    app.state.kalshi = kalshi_connector
     
-    # Start polling loops
-    polling_task_p = asyncio.create_task(poly_connector.start_polling())
-    polling_task_k = asyncio.create_task(kalshi_connector.start_polling())
+    # Initialize SubscriptionManager
+    from .manager import SubscriptionManager
+    sub_manager = SubscriptionManager()
     
-    # Hack to link Broadcast:
-    # We replace the update methods in StateManager? 
-    # Or cleaner: StateManager emits events.
-    # Let's modify StateManager to broadcast directly for MVP simplicity?
-    # No, let's keep it separate.
-    # We will run a loop that checks 'outbox' or just modify StateManager to accept a callback.
+    # Define spawner function that routes to correct connector
+    def spawner(market_id: str):
+        market = state.get_market(market_id)
+        if not market:
+            print(f"Cannot spawn poller: Market {market_id} not found in state")
+            # In a real app we might fetch it here.
+            return None
+        
+        if market.source == "polymarket":
+            return poly_connector.spawn_poller(market_id)
+        elif market.source == "kalshi":
+            return kalshi_connector.spawn_poller(market_id)
+        return None
+
+    sub_manager.set_spawner(spawner)
+
+    # Initial fetch (Backgrounded so server starts immediately)
+    print("Starting background market fetch...")
+    async def fetch_all():
+        print("Fetching Polymarket data...")
+        await poly_connector.fetch_initial_markets()
+        print("Fetching Kalshi data...")
+        await kalshi_connector.fetch_initial_markets()
+        print("Market fetch complete.")
+        
+    asyncio.create_task(fetch_all())
+    print("Server startup complete. Markets loading in background.")
     
+    # Link StateManager to WS manager (Broadcast)
+    # Note: Connectors call state.update_*, state calls us back.
+    # We route broadcast to SubscriptionManager.
     original_update_quote = state.update_quote
     def side_effect_quote(*args, **kwargs):
         msg = original_update_quote(*args, **kwargs)
-        asyncio.create_task(manager.broadcast(msg.model_dump()))
+        asyncio.create_task(sub_manager.broadcast(msg.market_id, msg.model_dump()))
         return msg
     state.update_quote = side_effect_quote
     
     original_update_ob = state.update_orderbook
     def side_effect_ob(*args, **kwargs):
         msg = original_update_ob(*args, **kwargs)
-        asyncio.create_task(manager.broadcast(msg.model_dump()))
+        asyncio.create_task(sub_manager.broadcast(msg.market_id, msg.model_dump()))
         return msg
     state.update_orderbook = side_effect_ob
 
     yield
     
-    # Shutdown
-    polling_task_p.cancel()
-    polling_task_k.cancel()
+    # Shutdown (Manager handles task cleanup if we implemented it, 
+    # but for now we just let them die with loop or explicit cancel)
+    # TODO: Shutdown logic
 
 app = FastAPI(lifespan=lifespan)
 
@@ -74,6 +96,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+
 
 @app.get("/")
 def read_root():

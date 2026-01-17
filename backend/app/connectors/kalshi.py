@@ -2,9 +2,21 @@ import httpx
 import asyncio
 from ..schemas import Market, Outcome, OrderBookLevel
 from ..state import StateManager
+from ..taxonomy import get_sector_from_kalshi_category
 
-# Kalshi public API
 KALSHI_API_URL = "https://api.elections.kalshi.com/trade-api/v2"
+
+SERIES_TO_SECTOR = {
+    "KXNFL": "Sports", "KXNBA": "Sports", "KXMLB": "Sports", 
+    "KXNHL": "Sports", "KXSOCCER": "Sports", "KXWNBA": "Sports",
+    "KXBTC": "Crypto", "KXETH": "Crypto", "KXSOL": "Crypto",
+    "KXSPY": "Economics", "KXGDP": "Economics", "KXFED": "Economics",
+    "KXTRUMP": "Politics", "KXBIDEN": "Politics", "KXELEC": "Politics",
+    "KXHOUSE": "Politics", "KXSENATE": "Politics",
+    "KXAI": "Tech", "KXOPENAI": "Tech",
+    "KXMV": "Other",
+}
+
 
 class KalshiConnector:
     def __init__(self, state_manager: StateManager):
@@ -12,171 +24,220 @@ class KalshiConnector:
         self.client = httpx.AsyncClient(base_url=KALSHI_API_URL, timeout=30.0)
 
     async def fetch_initial_markets(self):
-        """Fetch markets from Kalshi by querying events first, then markets per event"""
+        """Initial cache: just first few pages for browsing"""
         try:
-            # Get list of events (categories/topics)
-            events_resp = await self.client.get("/events", params={"limit": 30})
-            if events_resp.status_code != 200:
-                print(f"[Kalshi] Failed to fetch events: {events_resp.status_code}")
-                return 0
+            total = 0
+            cursor = None
             
-            events = events_resp.json().get("events", [])
-            
-            count = 0
-            for event in events[:15]:  # Limit for MVP
-                event_ticker = event.get("event_ticker")
-                if not event_ticker:
-                    continue
+            for _ in range(5):  # 5 pages = ~5K markets
+                params = {"limit": 1000}
+                if cursor:
+                    params["cursor"] = cursor
                 
-                # Get markets for this event
-                try:
-                    markets_resp = await self.client.get("/markets", params={
-                        "event_ticker": event_ticker,
-                        "limit": 10
-                    })
-                    if markets_resp.status_code == 200:
-                        markets_data = markets_resp.json().get("markets", [])
-                        for item in markets_data[:5]:  # Top 5 per event
-                            m = self.normalize_market(item, event)
-                            if m:
-                                self.state.update_market(m)
-                                count += 1
-                except Exception as e:
-                    pass  # Skip failed event
+                resp = await self.client.get("/markets", params=params)
+                if resp.status_code != 200:
+                    break
                 
-                await asyncio.sleep(0.1)  # Rate limit
+                data = resp.json()
+                markets = data.get("markets", [])
+                cursor = data.get("cursor")
+                
+                for item in markets:
+                    m = self.normalize_market(item)
+                    if m:
+                        self.state.update_market(m)
+                        total += 1
+                
+                if not cursor:
+                    break
+                await asyncio.sleep(0.1)
             
-            print(f"[Kalshi] Loaded {count} markets from {len(events)} events")
-            return count
-            
+            print(f"[Kalshi] Initial load: {total} markets")
+            return total
         except Exception as e:
-            print(f"[Kalshi] Error fetching markets: {e}")
+            print(f"[Kalshi] Error: {e}")
             return 0
 
-    def normalize_market(self, data: dict, event: dict = None) -> Market:
-        """Convert Kalshi market data to canonical Market schema"""
+    async def search_markets(self, query: str) -> list[Market]:
+        """
+        Multi-step smart search:
+        1. Check cache (instant)
+        2. Try exact ticker lookup (instant)
+        3. Scan events for matches (progressive)
+        """
+        q_lower = query.lower()
+        q_upper = query.upper()
+        results = []
+        
+        # === STEP 1: Check cache ===
+        cached = [
+            m for m in self.state.get_all_markets() 
+            if m.source == "kalshi" and (
+                q_lower in m.title.lower() or 
+                q_lower in (m.ticker or "").lower()
+            )
+        ]
+        if cached:
+            results.extend(cached)
+        
+        # === STEP 2: Try exact ticker lookup ===
+        # If query looks like a ticker (uppercase, has dash or KX prefix)
+        if q_upper.startswith("KX") or "-" in query:
+            try:
+                resp = await self.client.get(f"/markets/{q_upper}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    market_data = data.get("market")
+                    if market_data:
+                        m = self.normalize_market(market_data)
+                        if m and m.market_id not in [r.market_id for r in results]:
+                            self.state.update_market(m)
+                            results.append(m)
+            except:
+                pass
+        
+        # === STEP 3: Search events for matches ===
+        # Scan event pages looking for title matches
+        if len(results) < 10:
+            try:
+                cursor = None
+                pages_scanned = 0
+                max_pages = 10  # Limit to avoid long searches
+                
+                while pages_scanned < max_pages:
+                    params = {"limit": 100}
+                    if cursor:
+                        params["cursor"] = cursor
+                    
+                    resp = await self.client.get("/events", params=params)
+                    if resp.status_code != 200:
+                        break
+                    
+                    data = resp.json()
+                    events = data.get("events", [])
+                    cursor = data.get("cursor")
+                    pages_scanned += 1
+                    
+                    # Find matching events
+                    for event in events:
+                        title = event.get("title", "").lower()
+                        ticker = event.get("event_ticker", "").lower()
+                        
+                        if q_lower in title or q_lower in ticker:
+                            # Fetch markets for this event
+                            event_ticker = event.get("event_ticker")
+                            markets_resp = await self.client.get("/markets", params={
+                                "event_ticker": event_ticker,
+                                "limit": 50
+                            })
+                            if markets_resp.status_code == 200:
+                                for item in markets_resp.json().get("markets", []):
+                                    m = self.normalize_market(item)
+                                    if m and m.market_id not in [r.market_id for r in results]:
+                                        self.state.update_market(m)
+                                        results.append(m)
+                            
+                            # Found enough results
+                            if len(results) >= 50:
+                                break
+                    
+                    if not cursor or len(results) >= 50:
+                        break
+                    
+                    await asyncio.sleep(0.05)
+                    
+            except Exception as e:
+                print(f"[Kalshi] Search error: {e}")
+        
+        return results[:50]
+
+    def _get_sector_from_ticker(self, ticker: str) -> str:
+        ticker_upper = ticker.upper()
+        for prefix, sector in SERIES_TO_SECTOR.items():
+            if ticker_upper.startswith(prefix):
+                return sector
+        return "Other"
+
+    def normalize_market(self, data: dict) -> Market:
         try:
             market_ticker = data.get("ticker")
             if not market_ticker:
                 return None
             
-            # Skip multivariate synthetic markets (they have no direct orderbooks)
-            if market_ticker.startswith("KXMV"):
+            status = data.get("status", "active")
+            if status not in ["active", "open"]:
                 return None
             
-            # Use event title if available, fallback to market title
-            title = data.get("title", "Unknown Market")
-            if event:
-                subtitle = data.get("yes_sub_title") or data.get("subtitle", "")
-                if subtitle:
-                    title = f"{event.get('title', title)} - {subtitle}"
+            is_multivariate = market_ticker.startswith("KXMV")
+            sector = self._get_sector_from_ticker(market_ticker)
             
-            # Kalshi markets are binary Yes/No
-            # yes_bid/yes_ask are in cents (0-100)
+            title = data.get("title", "Unknown Market")
+            subtitle = data.get("subtitle") or data.get("yes_sub_title", "")
+            
+            if is_multivariate and subtitle:
+                title = f"Combo: {subtitle[:100]}"
+            elif not title or title == "Unknown Market":
+                title = subtitle or market_ticker
+            
+            if len(title) > 200:
+                title = title[:197] + "..."
+            
             yes_bid = float(data.get("yes_bid", 0)) / 100.0 if data.get("yes_bid") else 0
             yes_ask = float(data.get("yes_ask", 0)) / 100.0 if data.get("yes_ask") else 0
             yes_price = (yes_bid + yes_ask) / 2 if yes_bid and yes_ask else yes_bid or yes_ask
             
             outcomes = [
-                Outcome(
-                    outcome_id=f"{market_ticker}_yes",
-                    name=data.get("yes_sub_title", "Yes"),
-                    price=yes_price
-                ),
-                Outcome(
-                    outcome_id=f"{market_ticker}_no",
-                    name=data.get("no_sub_title", "No"),
-                    price=1.0 - yes_price if yes_price else 0
-                )
+                Outcome(outcome_id=f"{market_ticker}_yes", 
+                        name=(data.get("yes_sub_title", "Yes") or "Yes")[:50], 
+                        price=yes_price),
+                Outcome(outcome_id=f"{market_ticker}_no", 
+                        name=(data.get("no_sub_title", "No") or "No")[:50], 
+                        price=1.0 - yes_price if yes_price else 0)
             ]
 
             return Market(
                 market_id=market_ticker,
                 title=title,
                 description=data.get("rules_primary"),
-                category=event.get("category") if event else None,
+                category=data.get("event_ticker", "").split("-")[0],
+                sector=sector,
+                tags=[sector] if sector != "Other" else [],
                 ticker=market_ticker,
                 source="kalshi",
                 source_id=market_ticker,
                 outcomes=outcomes,
-                status=data.get("status", "active"),
+                status="active",
                 image_url=None
             )
-        except Exception as e:
-            print(f"[Kalshi] Error normalizing market {data.get('ticker')}: {e}")
+        except:
             return None
     
+    async def spawn_poller(self, market_id: str):
+        async def _poll_loop():
+            while True:
+                await self.poll_orderbook(market_id)
+                await asyncio.sleep(1.0)
+        return asyncio.create_task(_poll_loop())
+
     async def poll_orderbook(self, market_id: str):
-        """Poll orderbook for a Kalshi market"""
         market = self.state.get_market(market_id)
         if not market or market.source != "kalshi":
             return
-        
         try:
             resp = await self.client.get(f"/markets/{market.source_id}/orderbook")
             if resp.status_code == 200:
-                data = resp.json()
-                orderbook = data.get("orderbook", {})
-                
-                # Kalshi orderbook format:
-                # "yes": [[price_cents, quantity], ...] - bids for Yes
-                # "no": [[price_cents, quantity], ...] - bids for No
-                # 
-                # To get asks for Yes, we invert No bids: ask_yes = 1 - bid_no
-                
-                yes_levels = orderbook.get("yes") or []
-                no_levels = orderbook.get("no") or []
-                
-                # Yes bids (direct from "yes" array)
-                yes_bids = []
-                for level in yes_levels:
-                    if level and len(level) >= 2:
-                        yes_bids.append(OrderBookLevel(
-                            p=float(level[0]) / 100.0,
-                            s=float(level[1])
-                        ))
-                
-                # Yes asks (inverted from "no" array)
-                # If someone is bidding 40 for No, that's an ask of 60 for Yes
-                yes_asks = []
-                for level in no_levels:
-                    if level and len(level) >= 2:
-                        price_no = float(level[0]) / 100.0
-                        yes_asks.append(OrderBookLevel(
-                            p=1.0 - price_no,
-                            s=float(level[1])
-                        ))
-                
-                # Sort: bids descending, asks ascending
+                data = resp.json().get("orderbook", {})
+                yes_bids = [OrderBookLevel(p=float(l[0])/100, s=float(l[1])) 
+                           for l in data.get("yes", []) if l and len(l) >= 2]
+                yes_asks = [OrderBookLevel(p=1-float(l[0])/100, s=float(l[1])) 
+                           for l in data.get("no", []) if l and len(l) >= 2]
                 yes_bids.sort(key=lambda x: x.p, reverse=True)
                 yes_asks.sort(key=lambda x: x.p)
                 
-                # Update State for Yes outcome
-                yes_outcome_id = market.outcomes[0].outcome_id
-                self.state.update_orderbook(market_id, yes_outcome_id, yes_bids, yes_asks)
-                
-                # Generate quote
+                oid = market.outcomes[0].outcome_id
+                self.state.update_orderbook(market_id, oid, yes_bids, yes_asks)
                 if yes_bids and yes_asks:
-                    best_bid = yes_bids[0].p
-                    best_ask = yes_asks[0].p
-                    mid = (best_bid + best_ask) / 2
-                    self.state.update_quote(market_id, yes_outcome_id, mid, best_bid, best_ask)
-                elif yes_bids:
-                    best_bid = yes_bids[0].p
-                    self.state.update_quote(market_id, yes_outcome_id, best_bid, best_bid, best_bid + 0.01)
-                elif yes_asks:
-                    best_ask = yes_asks[0].p
-                    self.state.update_quote(market_id, yes_outcome_id, best_ask, best_ask - 0.01, best_ask)
-
-        except Exception as e:
-            # Silently skip - orderbook may not exist for some markets
+                    self.state.update_quote(market_id, oid, 
+                        (yes_bids[0].p + yes_asks[0].p)/2, yes_bids[0].p, yes_asks[0].p)
+        except:
             pass
-
-    async def start_polling(self):
-        """Continuously poll orderbooks for all Kalshi markets"""
-        while True:
-            markets = [m for m in self.state.get_all_markets() if m.source == "kalshi"]
-            for m in markets:
-                await self.poll_orderbook(m.market_id)
-                await asyncio.sleep(0.5)  # Rate limit
-            await asyncio.sleep(2)  # Wait between full cycles
