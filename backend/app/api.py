@@ -6,7 +6,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPExcept
 from fastapi.responses import StreamingResponse
 from .state import StateManager
 from .schemas import Market, OrderBook, QuotePoint
-from news.fetcher import news_fetcher  # type: ignore
+from .news.fetcher import news_fetcher  # type: ignore
 
 router = APIRouter()
 state = StateManager()
