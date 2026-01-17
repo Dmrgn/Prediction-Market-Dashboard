@@ -1,15 +1,37 @@
 import asyncio
 import time
 from typing import List, Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
-from .state import StateManager
-from .schemas import Market, OrderBook, QuotePoint
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
 
 router = APIRouter()
 state = StateManager()
 
 @router.get("/markets", response_model=List[Market])
-async def list_markets(source: Optional[str] = None, q: Optional[str] = None):
+async def list_markets(request: Request, source: Optional[str] = None, q: Optional[str] = None):
+    # If q is present, perform global search via platform APIs
+    if q:
+        # Check if connectors are available (might be during startup/testing)
+        poly = getattr(request.app.state, "poly", None)
+        kalshi = getattr(request.app.state, "kalshi", None)
+        
+        tasks = []
+        if poly and (not source or source == "polymarket"):
+            tasks.append(poly.search_markets(q))
+        if kalshi and (not source or source == "kalshi"):
+            tasks.append(kalshi.search_markets(q))
+            
+        if tasks:
+            results_list = await asyncio.gather(*tasks)
+            # Flatten results
+            external_markets = [item for sublist in results_list for item in sublist]
+            
+            # Update state with found markets so they can be retrieved/polled later
+            for m in external_markets:
+                 state.update_market(m)
+                 
+            return external_markets
+
+    # Fallback to local state if no query or search failed (or for pure listing)
     markets = state.get_all_markets()
     if source:
         markets = [m for m in markets if m.source == source]
@@ -77,34 +99,39 @@ class ConnectionManager:
             except:
                 pass 
 
-manager = ConnectionManager()
+from .manager import SubscriptionManager
+import json
+
+# ...
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+    sub_manager = SubscriptionManager()
+    # Accept connection
+    # Note: SubscriptionManager logic in `subscribe` adds to set.
+    # We should perform handshake/accept here? sub_manager.subscribe doesn't accept(), it assumes open.
+    await websocket.accept()
+    
     try:
         while True:
-            # Wait for messages (subscribe, etc.)
-            # For hackathon MVP, we just broadcast everything to everyone once connected
-            # or we can implement basic subscribe logic if time permits.
-            # Client sends: {"op": "subscribe"}
+            # Client must send {"op": "subscribe", "market_id": "..."}
+            # Or {"op": "unsubscribe", "market_id": "..."}
             data = await websocket.receive_json()
-            # We can log subscriptions here
+            op = data.get("op")
             
-            # Keep connection open
-            pass
+            if op == "subscribe":
+                pass
+                
+            elif op == "subscribe_market":
+                market_id = data.get("market_id")
+                if market_id:
+                    await sub_manager.subscribe(market_id, websocket)
+            
+            elif op == "unsubscribe_market":
+                market_id = data.get("market_id")
+                if market_id:
+                    await sub_manager.unsubscribe(market_id, websocket)
+                    
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        await sub_manager.unsubscribe_from_all(websocket)
 
-# Background Broadcast Loop
-# We need a way to send updates from State to Websockets.
-# Option: StateManager gets a reference to ConnectionManager?
-# Or we poll StateManager for changes? 
-# Better: StateManager calls a callback. 
-# For Hackathon: let's patch StateManager to call manager.broadcast
-
-async def broadcast_worker():
-    # Hack: Monkey patch or just checking state?
-    # Actually, StateManager shouldn't depend on API.
-    # Let's make StateManager have an async callback list.
-    pass

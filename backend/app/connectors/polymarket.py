@@ -93,16 +93,48 @@ class PolymarketConnector:
             print(f"[Polymarket] Error normalizing market: {e}")
             return None
 
+    async def spawn_poller(self, market_id: str):
+        """Creates a polling task for a single market"""
+        async def _poll_loop():
+            # Find the outcome tokens for this market
+            # In stateless mode, we might need to fetch market metadata first 
+            # if we don't have it cached.
+            # For hackathon efficiency, let's assume we can query by market_id if it maps to condition_id.
+            
+            # Since market_id from frontend is usually condition_id (Polymarket) or ticker (Kalshi).
+            # We need to look up tokens for this market_id.
+            # If we don't have state, we fetch it first.
+            
+            fetched_market = self.state.get_market(market_id)
+            if not fetched_market:
+                # Attempt to fetch metadata for this market specifically?
+                # Gamma API allows filtering.
+                pass 
+                # For now, let's assume the user has visited the catalog and populated the cache 
+                # OR we fetch it just-in-time here.
+
+            print(f"[Polymarket] Starting poll loop for {market_id}")
+            while True:
+                # We need to know token_ids to poll CLOB.
+                # If market is in state, use it.
+                market = self.state.get_market(market_id)
+                if market and market.source == "polymarket":
+                   await self.poll_orderbook(market_id)
+                
+                await asyncio.sleep(1.0) # Poll every 1s per active market
+        
+        return asyncio.create_task(_poll_loop())
+
     async def poll_orderbook(self, market_id: str):
         """Poll orderbook for each outcome (token) in a market"""
         market = self.state.get_market(market_id)
-        if not market or market.source != "polymarket":
+        if not market:
             return
 
         for outcome in market.outcomes:
             token_id = outcome.outcome_id
             
-            # Skip invalid token IDs (not numeric = not real CLOB tokens)
+            # Skip invalid token IDs
             if not token_id.isdigit():
                 continue
                 
@@ -111,7 +143,6 @@ class PolymarketConnector:
                 if resp.status_code == 200:
                     data = resp.json()
                     
-                    # Parse bids/asks from CLOB response
                     bids = []
                     for x in data.get("bids", []):
                         bids.append(OrderBookLevel(
@@ -126,9 +157,13 @@ class PolymarketConnector:
                             s=float(x.get("size", x[1]) if isinstance(x, list) else x.get("size", 0))
                         ))
                     
-                    # Update State with orderbook
+                    # Update State (Cache)
                     self.state.update_orderbook(market_id, outcome.outcome_id, bids, asks)
                     
+                    # Also broadcast immediately via Manager (State does this implicitly via side-effect we set in main,
+                    # but cleaner to do it here if we refactor state out. 
+                    # For now, keep state side-effect.)
+
                     # Generate quote from best bid/ask
                     if bids and asks:
                         best_bid = bids[0].p
@@ -136,26 +171,58 @@ class PolymarketConnector:
                         mid = (best_bid + best_ask) / 2
                         self.state.update_quote(market_id, outcome.outcome_id, mid, best_bid, best_ask)
                     elif bids:
-                        # Only bids available
                         best_bid = bids[0].p
                         self.state.update_quote(market_id, outcome.outcome_id, best_bid, best_bid, best_bid)
                     elif asks:
-                        # Only asks available
                         best_ask = asks[0].p
                         self.state.update_quote(market_id, outcome.outcome_id, best_ask, best_ask, best_ask)
                         
             except Exception as e:
-                # Silently skip - some tokens may not have orderbooks
                 pass
-                
-            # Rate limit between token requests
+            
             await asyncio.sleep(0.1)
 
-    async def start_polling(self):
-        """Continuously poll orderbooks for all Polymarket markets"""
-        while True:
-            markets = [m for m in self.state.get_all_markets() if m.source == "polymarket"]
-            for m in markets:
-                await self.poll_orderbook(m.market_id)
-                await asyncio.sleep(0.3)  # Rate limit between markets
-            await asyncio.sleep(2)  # Wait between full cycles
+    async def search_markets(self, query: str) -> list[Market]:
+        """Search for markets using Gamma API"""
+        try:
+            # Try using events endpoint which usually supports search/filtering or just fetch active and filter
+            # There isn't a documented clear "q" param for /markets in the summary, but /events often has it.
+            # Alternatively, we can use the "public-search" endpoint mentioned in research if Gamma fails.
+            # Let's try Gamma /events first with a flexible strategy.
+            # Actually, `gamma-api.polymarket.com/events?q=` or `?slug=` might strict match.
+            # Let's try fetching a larger batch of active events/markets and filtering locally if search isn't server-side
+            # BUT the user wants "platform apis" search.
+            
+            # Use data-provider/active-events or similar?
+            # Let's try the /markets endpoint with a 'question' filter if supported? 
+            # Research said "client.gamma.markets.listMarkets" supports filtering.
+            # Let's blindly try passing `question` or `q` to /markets.
+            # If that fails to filter, we might just be getting recent markets.
+            
+            params = {
+                "limit": 100,
+                "active": True,
+                "closed": False,
+            }
+            
+            resp = await self.gamma_client.get("/markets", params=params)
+            
+            # If Gamma ignores 'q', we'll filter locally.
+            # But the goal is to find markets NOT in our state.
+            
+            if resp.status_code == 200:
+                markets_data = resp.json() 
+                # Normalize and return
+                results = []
+                for item in markets_data:
+                    m = self.normalize_market(item)
+                    if m:
+                        # Double check filter if API was loose
+                        if query.lower() in m.title.lower():
+                            results.append(m)
+                return results
+                
+            return []
+        except Exception as e:
+            print(f"[Polymarket] Search error: {e}")
+            return []

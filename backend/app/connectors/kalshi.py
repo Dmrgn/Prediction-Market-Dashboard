@@ -106,6 +106,19 @@ class KalshiConnector:
             print(f"[Kalshi] Error normalizing market {data.get('ticker')}: {e}")
             return None
     
+    async def spawn_poller(self, market_id: str):
+        """Creates a polling task for a single Kalshi market"""
+        async def _poll_loop():
+            print(f"[Kalshi] Starting poll loop for {market_id}")
+            while True:
+                # We assume market metadata is active in state (from initial load or search)
+                # If backend restarts and we subscribe, we might need to re-fetch metadata? 
+                # MVP assumption: User refreshes page -> fetchMarkets() populates list -> User subscribes.
+                await self.poll_orderbook(market_id)
+                await asyncio.sleep(1.0) # Poll every 1s
+        
+        return asyncio.create_task(_poll_loop())
+
     async def poll_orderbook(self, market_id: str):
         """Poll orderbook for a Kalshi market"""
         market = self.state.get_market(market_id)
@@ -117,12 +130,6 @@ class KalshiConnector:
             if resp.status_code == 200:
                 data = resp.json()
                 orderbook = data.get("orderbook", {})
-                
-                # Kalshi orderbook format:
-                # "yes": [[price_cents, quantity], ...] - bids for Yes
-                # "no": [[price_cents, quantity], ...] - bids for No
-                # 
-                # To get asks for Yes, we invert No bids: ask_yes = 1 - bid_no
                 
                 yes_levels = orderbook.get("yes") or []
                 no_levels = orderbook.get("no") or []
@@ -137,7 +144,6 @@ class KalshiConnector:
                         ))
                 
                 # Yes asks (inverted from "no" array)
-                # If someone is bidding 40 for No, that's an ask of 60 for Yes
                 yes_asks = []
                 for level in no_levels:
                     if level and len(level) >= 2:
@@ -147,15 +153,12 @@ class KalshiConnector:
                             s=float(level[1])
                         ))
                 
-                # Sort: bids descending, asks ascending
                 yes_bids.sort(key=lambda x: x.p, reverse=True)
                 yes_asks.sort(key=lambda x: x.p)
                 
-                # Update State for Yes outcome
                 yes_outcome_id = market.outcomes[0].outcome_id
                 self.state.update_orderbook(market_id, yes_outcome_id, yes_bids, yes_asks)
                 
-                # Generate quote
                 if yes_bids and yes_asks:
                     best_bid = yes_bids[0].p
                     best_ask = yes_asks[0].p
@@ -169,14 +172,36 @@ class KalshiConnector:
                     self.state.update_quote(market_id, yes_outcome_id, best_ask, best_ask - 0.01, best_ask)
 
         except Exception as e:
-            # Silently skip - orderbook may not exist for some markets
             pass
 
-    async def start_polling(self):
-        """Continuously poll orderbooks for all Kalshi markets"""
-        while True:
-            markets = [m for m in self.state.get_all_markets() if m.source == "kalshi"]
-            for m in markets:
-                await self.poll_orderbook(m.market_id)
-                await asyncio.sleep(0.5)  # Rate limit
-            await asyncio.sleep(2)  # Wait between full cycles
+    async def search_markets(self, query: str) -> list[Market]:
+        """Search markets on Kalshi"""
+        try:
+            # Kalshi /markets endpoint doesn't strictly have a 'q' param documented in public docs usually,
+            # but usually 'ticker' or 'event_ticker'.
+            # However, we can try fetching events?
+            
+            # NOTE: Kalshi public API v2 isn't fully rich on text search. 
+            # We might have to fetch active events and filter.
+            
+            resp = await self.client.get("/markets", params={"limit": 100, "status": "active"})
+            if resp.status_code == 200:
+                data = resp.json().get("markets", [])
+                results = []
+                for item in data:
+                    # We might need event data for full context, but let's try with just market data
+                    # Or we can fetch events.
+                    
+                    # Basic filter
+                    if query.lower() in item.get("title", "").lower() or query.lower() in item.get("ticker", "").lower():
+                        # We need to normalize. normalizing needs an event?
+                        # Our normalize_market optional 'event' param handles this.
+                        m = self.normalize_market(item) # Event might be None, title might be less descriptive
+                        if m:
+                            results.append(m)
+                            
+                return results[:20]
+            return []
+        except Exception as e:
+            print(f"[Kalshi] Search error: {e}")
+            return []
