@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { fetchNews } from "@/lib/api/news"
+import { streamNews } from "@/lib/api/news"
 import type { Article } from "@/lib/types/news"
 
 type State =
@@ -10,12 +10,13 @@ type State =
 
 export function useNewsSearch(query: string) {
   const [state, setState] = useState<State>({ status: "idle", articles: [] })
-  const abortControllerRef = useRef<AbortController | null>(null)
+  const cleanupRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
-    // Abort previous request
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
+    // Cleanup previous stream
+    if (cleanupRef.current) {
+      cleanupRef.current()
+      cleanupRef.current = null
     }
 
     // Skip if query is empty
@@ -24,37 +25,32 @@ export function useNewsSearch(query: string) {
       return
     }
 
-    // Create new abort controller
-    const controller = new AbortController()
-    abortControllerRef.current = controller
-
     // Set loading state
     setState({ status: "loading", articles: [] })
 
-    // Fetch news
-    fetchNews({ query, signal: controller.signal })
-      .then((articles) => {
-        // Ignore if aborted
-        if (controller.signal.aborted) {
-          return
-        }
-        setState({ status: "success", articles })
-      })
-      .catch((error) => {
-        // Ignore if aborted
-        if (controller.signal.aborted || error.name === "AbortError") {
-          return
-        }
+    cleanupRef.current = streamNews({
+      query,
+      onUpdate: (payload) => {
+        setState({ status: "success", articles: payload.articles })
+      },
+      onDone: (payload) => {
+        setState({ status: "success", articles: payload.articles })
+      },
+      onError: (error) => {
         setState({
           status: "error",
           articles: [],
           error: error.message || "Failed to fetch news",
         })
-      })
+      },
+    })
 
     // Cleanup: abort on unmount or query change
     return () => {
-      controller.abort()
+      if (cleanupRef.current) {
+        cleanupRef.current()
+        cleanupRef.current = null
+      }
     }
   }, [query])
 

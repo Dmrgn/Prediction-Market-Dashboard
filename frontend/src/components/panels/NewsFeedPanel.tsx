@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { PanelInstance } from "@/hooks/useWorkspaceStore";
 import { useNewsSearch } from "@/hooks/useNewsSearch";
@@ -12,12 +12,36 @@ export function NewsFeedPanel({ panel }: NewsFeedPanelProps) {
   const [inputValue, setInputValue] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState(defaultQuery);
   const state = useNewsSearch(submittedQuery);
+  const [showNoResults, setShowNoResults] = useState(false);
+  const timeoutRef = useRef<number | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const queryToSearch = inputValue.trim() || defaultQuery;
     setSubmittedQuery(queryToSearch);
   };
+
+  useEffect(() => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+
+    setShowNoResults(false);
+
+    if (state.status === "success" && state.articles.length === 0) {
+      timeoutRef.current = window.setTimeout(() => {
+        setShowNoResults(true);
+      }, 10_000);
+    }
+
+    return () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, [state.status, state.articles.length, submittedQuery]);
 
   return (
     <Card className="flex h-full flex-col">
@@ -45,7 +69,7 @@ export function NewsFeedPanel({ panel }: NewsFeedPanelProps) {
 
         {state.status === "success" && state.articles.length === 0 && (
           <div className="text-sm text-muted-foreground">
-            No results for "{submittedQuery}"
+            {showNoResults ? `No results for "${submittedQuery}"` : "Analyzing…"}
           </div>
         )}
 

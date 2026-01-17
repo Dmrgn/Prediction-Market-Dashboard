@@ -5,7 +5,7 @@ from pathlib import Path
 # Load .env before importing providers so API keys are available
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
-from typing import List, Dict, Callable
+from typing import List, Dict, Callable, Generator, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .exa import fetch_exa
@@ -82,6 +82,32 @@ class NewsFetcher:
         if not valid_providers:
             return []
 
+        for _, result in self.fetch_multiple_iter(
+            providers=valid_providers,
+            query=query,
+            limit=limit,
+            **kwargs,
+        ):
+            articles.extend(result)
+
+        return articles
+
+    def fetch_multiple_iter(
+        self,
+        providers: List[str],
+        query: str,
+        limit: int = 20,
+        **kwargs,
+    ) -> Generator[Tuple[str, List[Article]], None, None]:
+        """
+        Fetch news from multiple providers in parallel and yield results
+        as each provider completes.
+        """
+        valid_providers = [p for p in providers if p in self._providers]
+
+        if not valid_providers:
+            return
+
         def fetch_from_provider(provider: str) -> List[Article]:
             try:
                 return self._providers[provider](
@@ -93,23 +119,21 @@ class NewsFetcher:
                 print(f"[NewsFetcher] Error with {provider}: {e}")
                 return []
 
-        # Fetch all providers in parallel
         with ThreadPoolExecutor(max_workers=len(valid_providers)) as executor:
             future_to_provider = {
                 executor.submit(fetch_from_provider, provider): provider
                 for provider in valid_providers
             }
-            
+
             for future in as_completed(future_to_provider):
                 provider = future_to_provider[future]
                 try:
                     result = future.result()
                     print(f"[NewsFetcher] {provider} returned {len(result)} articles")
-                    articles.extend(result)
+                    yield provider, result
                 except Exception as e:
                     print(f"[NewsFetcher] {provider} failed: {e}")
-
-        return articles
+                    yield provider, []
 
 
 news_fetcher = NewsFetcher()
