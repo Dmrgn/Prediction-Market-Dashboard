@@ -1,0 +1,5 @@
+fastapi[standard]
+httpx
+websockets
+uvicorn
+pydantic-settings
