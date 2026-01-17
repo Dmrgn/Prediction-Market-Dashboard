@@ -1,9 +1,18 @@
 import { Responsive, WidthProvider } from "react-grid-layout";
-import type { Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import { PanelRegistry } from "@/components/panels/PanelRegistry";
 import { useWorkspaceStore, type PanelInstance } from "@/hooks/useWorkspaceStore";
+
+type GridLayoutItem = {
+  i: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+type GridLayout = ReadonlyArray<GridLayoutItem>;
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
@@ -14,7 +23,7 @@ export function DashboardGrid() {
       state.updateLayout
   );
 
-  const layout: Layout[] = panels
+  const layout: GridLayoutItem[] = panels
     .filter((panel: PanelInstance) => panel.isVisible)
     .map((panel: PanelInstance) => ({
       i: panel.id,
@@ -35,8 +44,9 @@ export function DashboardGrid() {
         rowHeight={60}
         margin={[16, 16]}
         draggableHandle=".panel-drag-handle"
-        onLayoutChange={(currentLayout: Layout[]) => {
-          currentLayout.forEach((item: Layout) => {
+        draggableCancel=".panel-content"
+        onLayoutChange={(currentLayout: GridLayout, _allLayouts: Partial<Record<string, GridLayout>>) => {
+          currentLayout.forEach((item: GridLayoutItem) => {
             updateLayout(item.i, { x: item.x, y: item.y, w: item.w, h: item.h });
           });
         }}
@@ -45,9 +55,7 @@ export function DashboardGrid() {
           .filter((panel: PanelInstance) => panel.isVisible)
           .map((panel: PanelInstance) => (
             <div key={panel.id} data-grid={{ x: panel.x, y: panel.y, w: panel.w, h: panel.h }}>
-              <div className="panel-drag-handle h-full">
-                <PanelRegistry panel={panel} />
-              </div>
+              <PanelRegistry panel={panel} />
             </div>
           ))}
       </ResponsiveGridLayout>

@@ -40,7 +40,7 @@ const defaultPanelData: Record<PanelType, Record<string, unknown>> = {
     title: "Market Aggregator",
   },
   NEWS_FEED: {
-    query: "prediction markets",
+    query: "stock",
     title: "News Feed",
   },
 };

@@ -3,3 +3,4 @@ httpx
 websockets
 uvicorn
 pydantic-settings
+python-dotenv

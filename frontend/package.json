@@ -22,7 +22,7 @@
     "react": "^19",
     "react-dom": "^19",
     "react-draggable": "^4.4.6",
-    "react-grid-layout": "^1.5.0",
+    "react-grid-layout": "^2.2.2",
     "react-resizable": "^3.0.5",
     "recharts": "2.15.4",
     "tailwind-merge": "^3.3.1",
@@ -31,8 +31,9 @@
     "zustand": "^5.0.10"
   },
   "devDependencies": {
+    "@types/bun": "latest",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@types/bun": "latest"
+    "@types/react-grid-layout": "^2.1.0"
   }
 }
