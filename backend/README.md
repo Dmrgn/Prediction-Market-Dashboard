@@ -6,8 +6,8 @@ This backend aggregates prediction market data from **Polymarket** and **Kalshi*
 
 ```bash
 cd backend
-pip install -r requirements.txt
-python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv sync
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 ## Base URL

@@ -253,6 +253,7 @@ export const backendInterface = {
     if (!resolvedOutcomeId) {
       return { marketId: market.market_id, outcomeId: null, points: [] };
     }
+    console.log(buildUrl(`/markets/${market.market_id}/history`, { outcome_id: resolvedOutcomeId }));
     const history = await fetchJson<QuotePoint[]>(
       buildUrl(`/markets/${market.market_id}/history`, { outcome_id: resolvedOutcomeId }),
     );

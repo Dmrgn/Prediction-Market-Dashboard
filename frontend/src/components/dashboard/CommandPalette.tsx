@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Command } from "cmdk";
+import { backendInterface } from "@/backendInterface";
 import { getCommandEntries, type CommandParamSchema } from "@/commands/registry";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -8,11 +9,45 @@ import { useUIStore } from "@/hooks/useUIStore";
 
 type FocusMode = "list" | "param" | "run";
 
+type SubPaletteType = "market" | "select";
+
+type SubPaletteOption = {
+  value: string;
+  label: string;
+  description?: string;
+};
+
+type SubPaletteState = {
+  open: boolean;
+  type: SubPaletteType | null;
+  title: string;
+  query: string;
+  options: SubPaletteOption[];
+  baseOptions: SubPaletteOption[];
+  loading: boolean;
+  emptyMessage: string;
+  paramName: string;
+  paramIndex: number;
+};
+
 const buildInitialValues = (params?: CommandParamSchema[]) =>
   params?.reduce<Record<string, string>>((acc, param) => {
     acc[param.name] = param.defaultValue ?? "";
     return acc;
   }, {}) ?? {};
+
+const createEmptySubPalette = (): SubPaletteState => ({
+  open: false,
+  type: null,
+  title: "",
+  query: "",
+  options: [],
+  baseOptions: [],
+  loading: false,
+  emptyMessage: "",
+  paramName: "",
+  paramIndex: 0,
+});
 
 export function CommandPalette() {
   const { isCommandPaletteOpen: isOpen, closeCommandPalette: onClose, initialCommandId, initialParams } = useUIStore();
@@ -26,10 +61,16 @@ export function CommandPalette() {
   const [focusMode, setFocusMode] = useState<FocusMode>("list");
   const [activeParamIndex, setActiveParamIndex] = useState(0);
 
+  // Sub-palette state
+  const [subPalette, setSubPalette] = useState<SubPaletteState>(createEmptySubPalette());
+  const [subPaletteIndex, setSubPaletteIndex] = useState(0);
+
   // Refs for focusing elements
   const searchInputRef = useRef<HTMLInputElement>(null);
   const paramRefs = useRef<(HTMLInputElement | null)[]>([]);
   const runButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subPaletteInputRef = useRef<HTMLInputElement | null>(null);
+  const debounceRef = useRef<number | null>(null);
 
   const entries = useMemo(
     () =>
@@ -73,6 +114,14 @@ export function CommandPalette() {
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (subPalette.open) {
+      requestAnimationFrame(() => {
+        subPaletteInputRef.current?.focus();
+      });
+    }
+  }, [subPalette.open]);
+
   const filteredEntries = entries.filter((entry) => {
     if (!search.trim()) return true;
     const haystack = `${entry.label} ${entry.description ?? ""}`.toLowerCase();
@@ -82,6 +131,16 @@ export function CommandPalette() {
   // Derived active entry based on what's highlighted in the list
   const activeEntry = useMemo(() => commandMap.get(selectedValue) ?? null, [selectedValue, commandMap]);
 
+  const filteredSubPaletteOptions = useMemo(() => {
+    if (!subPalette.open) return [] as SubPaletteOption[];
+    if (subPalette.type === "select") {
+      const needle = subPalette.query.trim().toLowerCase();
+      if (!needle) return subPalette.baseOptions;
+      return subPalette.baseOptions.filter((option) => option.label.toLowerCase().includes(needle));
+    }
+    return subPalette.options;
+  }, [subPalette]);
+
   // When activeEntry changes, reset param values (unless we are deep in editing logic, but usually switching command = reset)
   useEffect(() => {
     if (focusMode === "list") {
@@ -90,10 +149,72 @@ export function CommandPalette() {
     }
   }, [activeEntry, focusMode]);
 
+  useEffect(() => {
+    if (!subPalette.open || subPalette.type !== "market") return;
+
+    if (debounceRef.current) {
+      window.clearTimeout(debounceRef.current);
+    }
+
+    const query = subPalette.query.trim();
+    if (query.length < 2) {
+      setSubPalette((prev) => ({
+        ...prev,
+        options: [],
+        loading: false,
+        emptyMessage: "Type at least 2 characters",
+      }));
+      return;
+    }
+
+    setSubPalette((prev) => ({ ...prev, loading: true }));
+
+    let active = true;
+    debounceRef.current = window.setTimeout(() => {
+      backendInterface
+        .fetchMarkets(query)
+        .then((markets) => {
+          if (!active) return;
+          const options = markets.map((market) => ({
+            value: market.market_id,
+            label: market.title,
+            description: `${market.source} • ${market.market_id.slice(0, 8)}…`,
+          }));
+          setSubPalette((prev) => ({
+            ...prev,
+            options,
+            loading: false,
+            emptyMessage: options.length ? "" : "No markets found",
+          }));
+        })
+        .catch(() => {
+          if (!active) return;
+          setSubPalette((prev) => ({
+            ...prev,
+            options: [],
+            loading: false,
+            emptyMessage: "Unable to load markets",
+          }));
+        });
+    }, 300);
+
+    return () => {
+      active = false;
+      if (debounceRef.current) {
+        window.clearTimeout(debounceRef.current);
+      }
+    };
+  }, [subPalette.open, subPalette.query, subPalette.type]);
+
+  useEffect(() => {
+    if (!subPalette.open) return;
+    setSubPaletteIndex(0);
+  }, [subPalette.open, filteredSubPaletteOptions.length]);
+
   // Effects to handle focus moves
   useEffect(() => {
-    if (!isOpen) return;
-    
+    if (!isOpen || subPalette.open) return;
+
     if (focusMode === "list") {
       // Focus the search input so up/down arrows work in cmdk list
       searchInputRef.current?.focus();
@@ -106,28 +227,78 @@ export function CommandPalette() {
         runButtonRef.current?.focus();
       });
     }
-  }, [focusMode, activeParamIndex, isOpen]);
+  }, [focusMode, activeParamIndex, isOpen, subPalette.open]);
 
   // Reset state when opening/closing or filtering
   useEffect(() => {
     if (isOpen && filteredEntries.length > 0) {
       // Default select first item if none selected
-      if (!selectedValue || !filteredEntries.some(e => e.id === selectedValue)) {
+      if (!selectedValue || !filteredEntries.some((entry) => entry.id === selectedValue)) {
         const first = filteredEntries[0];
         if (first) setSelectedValue(first.id);
       }
     }
   }, [isOpen, filteredEntries, selectedValue]);
 
+  const moveFocusAfterParam = (index: number) => {
+    const totalParams = activeEntry?.params?.length ?? 0;
+    if (index < totalParams - 1) {
+      setFocusMode("param");
+      setActiveParamIndex(index + 1);
+    } else {
+      setFocusMode("run");
+    }
+  };
+
+  const closeSubPalette = (returnToParam = true) => {
+    setSubPalette((prev) => ({ ...prev, open: false }));
+    if (returnToParam) {
+      setFocusMode("param");
+      setActiveParamIndex(subPalette.paramIndex);
+    }
+  };
+
+  const handleSubPaletteSelect = (option: SubPaletteOption) => {
+    setParamValues((prev) => ({
+      ...prev,
+      [subPalette.paramName]: option.value,
+    }));
+    setSubPalette((prev) => ({ ...prev, open: false }));
+    moveFocusAfterParam(subPalette.paramIndex);
+  };
+
+  const openSubPaletteForParam = (param: CommandParamSchema, index: number) => {
+    if (param.type === "text") return;
+
+    const baseOptions =
+      param.type === "select"
+        ? (param.options ?? []).map((option) => ({ value: option, label: option }))
+        : [];
+
+    setSubPalette({
+      open: true,
+      type: param.type,
+      title: param.label,
+      query: "",
+      options: [],
+      baseOptions,
+      loading: false,
+      emptyMessage: param.type === "market" ? "Type at least 2 characters" : "No options",
+      paramName: param.name,
+      paramIndex: index,
+    });
+    setSubPaletteIndex(0);
+  };
+
   const handleRun = () => {
     if (!activeEntry) return;
     activeEntry.handler(paramValues);
-    
+
     const shouldClose = activeEntry.closeOnRun !== false;
     if (shouldClose) {
       onClose();
     }
-    
+
     // Reset state
     setSearch("");
     setFocusMode("list");
@@ -139,7 +310,39 @@ export function CommandPalette() {
     }
   };
 
+  const handleSubPaletteKeyDown = (event: React.KeyboardEvent) => {
+    if (!subPalette.open) return;
+    event.stopPropagation();
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeSubPalette();
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setSubPaletteIndex((prev) => Math.min(prev + 1, Math.max(0, filteredSubPaletteOptions.length - 1)));
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setSubPaletteIndex((prev) => Math.max(prev - 1, 0));
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const option = filteredSubPaletteOptions[subPaletteIndex];
+      if (option) {
+        handleSubPaletteSelect(option);
+      }
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (subPalette.open) return;
     // If we're in the list, cmdk handles Up/Down. We listen for Enter to move to params.
     if (focusMode === "list") {
       if (e.key === "Enter") {
@@ -201,15 +404,13 @@ export function CommandPalette() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-6">
-      <div 
-        className="w-full max-w-2xl rounded-xl border border-border bg-card shadow-xl"
-        onKeyDown={handleKeyDown}
-      >
+      <div className="relative w-full max-w-2xl rounded-xl border border-border bg-card shadow-xl" onKeyDown={handleKeyDown}>
         <Command
           className="w-full"
           loop
           value={selectedValue}
           onValueChange={(val) => {
+            if (subPalette.open) return;
             // Only allow changing selection via mouse/keyboard if we are in list mode
             // If we are editing params, we don't want hover to change the active entry on the left
             if (focusMode === "list") {
@@ -232,15 +433,14 @@ export function CommandPalette() {
           </div>
           <div className="grid gap-0 md:grid-cols-[1.3fr_1fr]">
             <Command.List className="max-h-72 overflow-y-auto p-2">
-              <Command.Empty className="p-4 text-sm text-muted-foreground">
-                No matching commands.
-              </Command.Empty>
+              <Command.Empty className="p-4 text-sm text-muted-foreground">No matching commands.</Command.Empty>
               {filteredEntries.map((entry) => (
                 <Command.Item
                   key={entry.id}
                   value={entry.id}
                   className="flex cursor-pointer flex-col gap-1 rounded-lg px-3 py-2 text-sm text-foreground aria-selected:bg-muted data-[selected=true]:bg-muted"
                   onSelect={() => {
+                    if (subPalette.open) return;
                     // Clicking an item should enter param mode
                     if (focusMode === "list") {
                       if (entry.params?.length) {
@@ -253,9 +453,7 @@ export function CommandPalette() {
                   }}
                 >
                   <span className="font-medium">{entry.label}</span>
-                  {entry.description && (
-                    <span className="text-xs text-muted-foreground">{entry.description}</span>
-                  )}
+                  {entry.description && <span className="text-xs text-muted-foreground">{entry.description}</span>}
                 </Command.Item>
               ))}
             </Command.List>
@@ -270,32 +468,39 @@ export function CommandPalette() {
                       <div className="text-xs text-muted-foreground">{activeEntry.description}</div>
                     )}
                   </div>
-                  
+
                   {activeEntry.params?.length ? (
                     <div className="space-y-3">
-                      {activeEntry.params.map((param, index) => (
-                        <label key={param.name} className="block space-y-1 text-xs text-muted-foreground">
-                          <span>{param.label}</span>
-                          <Input
-                            ref={(node) => {
-                              paramRefs.current[index] = node;
-                            }}
-                            value={paramValues[param.name] ?? ""}
-                            placeholder={param.placeholder}
-                            // When clicking directly into an input
-                            onFocus={() => {
-                              setFocusMode("param");
-                              setActiveParamIndex(index);
-                            }}
-                            onChange={(event) =>
-                              setParamValues((prev) => ({
-                                ...prev,
-                                [param.name]: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                      ))}
+                      {activeEntry.params.map((param, index) => {
+                        const isSelectable = param.type !== "text";
+                        return (
+                          <label key={param.name} className="block space-y-1 text-xs text-muted-foreground">
+                            <span>{param.label}</span>
+                            <Input
+                              ref={(node) => {
+                                paramRefs.current[index] = node;
+                              }}
+                              value={paramValues[param.name] ?? ""}
+                              placeholder={param.placeholder}
+                              readOnly={isSelectable}
+                              onFocus={() => {
+                                setFocusMode("param");
+                                setActiveParamIndex(index);
+                                if (isSelectable) {
+                                  openSubPaletteForParam(param, index);
+                                }
+                              }}
+                              onChange={(event) => {
+                                if (isSelectable) return;
+                                setParamValues((prev) => ({
+                                  ...prev,
+                                  [param.name]: event.target.value,
+                                }));
+                              }}
+                            />
+                          </label>
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="text-xs text-muted-foreground">No parameters required.</div>
@@ -331,6 +536,61 @@ export function CommandPalette() {
             )}
           </div>
         </Command>
+
+        {subPalette.open && (
+          <div
+            className="fixed inset-0 z-[60] flex items-start justify-center bg-black/40 p-6"
+            onKeyDown={handleSubPaletteKeyDown}
+          >
+            <div className="w-full max-w-xl rounded-xl border border-border bg-card shadow-xl">
+              <div className="border-b border-border p-4">
+                <div className="text-sm font-semibold">{subPalette.title}</div>
+                <div className="mt-2">
+                  <Input
+                    ref={subPaletteInputRef}
+                    value={subPalette.query}
+                    placeholder={
+                      subPalette.type === "market" ? "Search markets..." : "Search options..."
+                    }
+                    onChange={(event) =>
+                      setSubPalette((prev) => ({
+                        ...prev,
+                        query: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              <div className="max-h-64 overflow-y-auto p-2">
+                {subPalette.loading ? (
+                  <div className="p-4 text-sm text-muted-foreground">Searching…</div>
+                ) : filteredSubPaletteOptions.length === 0 ? (
+                  <div className="p-4 text-sm text-muted-foreground">
+                    {subPalette.emptyMessage || "No results"}
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {filteredSubPaletteOptions.map((option, index) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => handleSubPaletteSelect(option)}
+                        className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
+                          index === subPaletteIndex ? "bg-muted" : "hover:bg-muted"
+                        }`}
+                      >
+                        <div className="font-medium text-foreground">{option.label}</div>
+                        {option.description && (
+                          <div className="text-xs text-muted-foreground">{option.description}</div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
