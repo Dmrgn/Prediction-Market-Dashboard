@@ -1,4 +1,4 @@
-import { MoreHorizontal } from "lucide-react";
+import { GripVertical, MoreHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,18 +50,27 @@ export function PanelWrapper({ panel, children }: PanelWrapperProps) {
     <Card className="flex h-full flex-col">
       <CardHeader className="flex flex-row items-center justify-between gap-3">
         <CardTitle>{String(panel.data.title ?? "Untitled Panel")}</CardTitle>
-        <DropdownMenu>
-          <DropdownMenuTrigger className="rounded-md p-1 text-muted-foreground hover:bg-muted">
-            <MoreHorizontal className="h-4 w-4" />
-            <span className="sr-only">Panel actions</span>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={handleEdit}>Edit</DropdownMenuItem>
-            <DropdownMenuItem onClick={handleDelete} variant="destructive">
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger className="rounded-md p-1 text-muted-foreground hover:bg-muted">
+              <MoreHorizontal className="h-4 w-4" />
+              <span className="sr-only">Panel actions</span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleEdit}>Edit</DropdownMenuItem>
+              <DropdownMenuItem onClick={handleDelete} variant="destructive">
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+                    <button
+            type="button"
+            className="panel-drag-handle rounded-md p-1 text-muted-foreground hover:bg-muted"
+            aria-label="Drag panel"
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        </div>
       </CardHeader>
       <CardContent className="min-h-0 flex-1 overflow-hidden">
         {children}

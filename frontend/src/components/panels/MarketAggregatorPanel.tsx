@@ -5,14 +5,6 @@ import { backendInterface, type Market, type MarketPoint } from "@/backendInterf
 import { formatCompactNumber, formatCurrency, formatTimestamp } from "@/lib/utils";
 import type { PanelInstance } from "@/hooks/useWorkspaceStore";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
@@ -147,14 +139,16 @@ export function MarketAggregatorPanel({ panel }: MarketAggregatorPanelProps) {
 
   return (
     <div className="min-h-0 flex-1 h-full overflow-y-auto">
-      <Card className="h-full">
-        <CardHeader className="space-y-3">
+      <div className="flex h-full flex-col">
+        <div className="space-y-3">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <CardTitle className="text-lg">{market?.title ?? "Market"}</CardTitle>
-              <CardDescription>
+              <div className="text-lg font-semibold leading-none tracking-tight">
+                {market?.title ?? "Market"}
+              </div>
+              <p className="text-sm text-muted-foreground">
                 {sourceLabel} • {outcomeLabel}
-              </CardDescription>
+              </p>
             </div>
             <div className="w-[170px]">
               <Select value={chartMode} onValueChange={(value) => setChartMode(value as ChartMode)}>
@@ -190,8 +184,8 @@ export function MarketAggregatorPanel({ panel }: MarketAggregatorPanelProps) {
             </Button>
           </div>
           {error && <div className="text-sm text-destructive">{error}</div>}
-        </CardHeader>
-        <CardContent className="space-y-6">
+        </div>
+        <div className="space-y-6 py-6">
           {!error && points.length === 0 && (
             <div className="text-sm text-muted-foreground">Loading market data…</div>
           )}
@@ -265,8 +259,8 @@ export function MarketAggregatorPanel({ panel }: MarketAggregatorPanelProps) {
               </AreaChart>
             </ChartContainer>
           )}
-        </CardContent>
-        <CardFooter className="grid w-full gap-3 text-sm">
+        </div>
+        <div className="grid w-full gap-3 text-sm">
           <div className="grid gap-2">
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Latest Price</span>
@@ -289,8 +283,8 @@ export function MarketAggregatorPanel({ panel }: MarketAggregatorPanelProps) {
               </span>
             </div>
           </div>
-        </CardFooter>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

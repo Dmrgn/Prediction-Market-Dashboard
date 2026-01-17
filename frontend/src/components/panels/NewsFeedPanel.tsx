@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { PanelInstance } from "@/hooks/useWorkspaceStore";
 import { useNewsSearch } from "@/hooks/useNewsSearch";
 
@@ -44,12 +43,10 @@ export function NewsFeedPanel({ panel }: NewsFeedPanelProps) {
   }, [state.status, state.articles.length, submittedQuery]);
 
   return (
-    <Card className="flex h-full flex-col">
-      <CardHeader className="shrink-0 panel-drag-handle cursor-move">
-        <CardTitle>{String(panel.data.title ?? "News Feed")}</CardTitle>
-      </CardHeader>
-      <CardContent className="panel-content min-h-0 flex-1 space-y-4 overflow-y-auto">
+    <div className="flex h-full flex-col">
+      <div className="panel-content min-h-0 flex-1 space-y-4 overflow-y-auto pt-6">
         <form onSubmit={handleSubmit}>
+          <label>Search news...</label>
           <input
             type="text"
             placeholder="Search news..."
@@ -103,7 +100,7 @@ export function NewsFeedPanel({ panel }: NewsFeedPanelProps) {
             ))}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

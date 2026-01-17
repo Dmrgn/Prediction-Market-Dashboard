@@ -71,7 +71,7 @@ function AppContent() {
         </div>
       </header>
 
-      <main className="flex flex-1 overflow-hidden">
+      <main className="flex flex-1 overflow-hidden max-h-[90vh]">
         <section className="flex-1 overflow-y-auto p-4">
           <DashboardGrid />
         </section>
