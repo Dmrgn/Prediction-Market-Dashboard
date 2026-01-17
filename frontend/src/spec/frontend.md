@@ -38,12 +38,13 @@ This specification defines a modular, agentic dashboard for prediction market da
 The source of truth for all external data. It abstracts both REST and Real-time communication.
 
 - **REST Interface:** Standard `fetch` calls with strict TypeScript return types.
-- **WebSocket Interface:** A singleton manager that allows panels to subscribe to specific topics (e.g., `subscribeToMarket(id)`).
+- **WebSocket Interface:** A singleton manager that streams global quote updates (all connected clients receive broadcasts once connected).
 - **Functionality:**
-  - E.g
-    - `fetchMarketData(id: string)`: Returns historical price/volume.
-    - `fetchNews(query: string)`: Returns market-related news.
-    - `socket`: Manages the heartbeat and event routing for incoming price updates.
+  - `fetchMarkets(q?, source?)`: Search markets by title or outcome name.
+  - `fetchMarket(id)`: Fetch a single market record (used for panel metadata).
+  - `fetchMarketData(id, outcomeId?)`: Returns historical quote points (mid/bid/ask + volume).
+  - `fetchRelatedMarket(id)` and `fetchOrderbook(id, outcomeId)` for cross-market linking and depth.
+  - `fetchNews(query)`: Currently mocked until a backend endpoint exists.
 
 ---
 
@@ -76,10 +77,11 @@ Each panel in the dashboard is an instance of a "Panel Class" defined by:
 
 ### 4.2 Initial Available Panels
 - **Market Aggregator Graph:**
-  - Fetches and renders candlestick/line data for a specific market.
-  - Connects to a WebSocket room via the Backend Interface for live price ticks.
+  - Fetches market metadata from `/markets/{id}` and historical quotes from `/markets/{id}/history`.
+  - Renders a shadcn-styled Recharts area chart with optional mid-only or bid/ask/mid views.
+  - Subscribes to the global WebSocket feed for live quote updates.
 - **News Feed:**
-  - Fetches news based on a keyword or market ID.
+  - Fetches news based on a keyword or market ID (mocked for now).
   - Features sentiment badges and timestamps.
 
 ---
@@ -106,8 +108,10 @@ Manages the "Workspace" state.
 - **CSS:** Tailwind CSS v4 using the new `@theme` engine for highly performant styling.
 - **Components:**
   - **Grid:** `react-grid-layout` for the drag/resize functionality.
-  - **Command Palette:** Built with `cmdk` (via Shadcn `Command`).
-  - **Agent UI:** A small, persistent chat overlay or a dedicated mode within the Command Palette to view the AI's "thought" chain.
+- **Command Palette:** Built with `cmdk` (via Shadcn `Command`), it can execute agent commands and log activity.
+- **Agent UI:** The agent activity feed is shared between the command palette and the right sidebar.
+- **Sidebar:** Starts collapsed by default and automatically opens after running agent commands.
+- **Market Aggregator Panel:** Provides a copy-to-clipboard button for the market ID.
 
 ---
 

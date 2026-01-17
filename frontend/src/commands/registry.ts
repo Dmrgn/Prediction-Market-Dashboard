@@ -21,7 +21,7 @@ export type CommandPayloads =
   | { type: "QUERY_MARKET"; data: { marketId: string } }
   | { type: "RUN_AI"; data: { prompt: string } };
 
-export type CommandParamType = "text" | "select";
+export type CommandParamType = "text" | "select" | "market";
 
 export interface CommandParamSchema {
   name: string;
@@ -81,10 +81,10 @@ export const getCommandEntries = (
     params: [
       {
         name: "marketId",
-        label: "Market ID",
-        type: "text",
-        placeholder: "demo-market",
-        defaultValue: "demo-market",
+        label: "Market",
+        type: "market",
+        placeholder: "Search markets",
+        defaultValue: "",
       },
     ],
     handler: (values) =>
@@ -123,10 +123,10 @@ export const getCommandEntries = (
     params: [
       {
         name: "marketId",
-        label: "Market ID",
-        type: "text",
-        placeholder: "demo-market",
-        defaultValue: "demo-market",
+        label: "Market",
+        type: "market",
+        placeholder: "Search markets",
+        defaultValue: "",
       },
     ],
     handler: (values) =>

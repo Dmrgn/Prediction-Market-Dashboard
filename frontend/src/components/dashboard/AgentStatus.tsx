@@ -1,22 +1,20 @@
 import { useWorkspaceStore, type PanelInstance } from "@/hooks/useWorkspaceStore";
+import { useAgentStore } from "@/hooks/useAgentStore";
 
-interface AgentStatusProps {
-  messages: string[];
-}
-
-export function AgentStatus({ messages }: AgentStatusProps) {
+export function AgentStatus() {
   const panels = useWorkspaceStore((state: { panels: PanelInstance[] }) => state.panels);
+  const events = useAgentStore((state) => state.events);
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4 text-sm shadow-sm">
+    <div className="px-4">
       <div className="text-xs uppercase tracking-wide text-muted-foreground">Agent Activity</div>
       <div className="mt-3 space-y-2">
-        {messages.length === 0 && (
+        {events.length === 0 && (
           <div className="text-muted-foreground">No recent agent activity.</div>
         )}
-        {messages.map((message, index) => (
-          <div key={`${message}-${index}`} className="rounded-lg bg-muted px-3 py-2 text-xs">
-            {message}
+        {events.map((event) => (
+          <div key={event.id} className="rounded-lg bg-muted px-3 py-2 text-xs">
+            {event.message}
           </div>
         ))}
       </div>

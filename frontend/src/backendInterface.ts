@@ -69,6 +69,8 @@ type OrderBookMessage = {
 type MarketPoint = {
   timestamp: string;
   price: number;
+  bid?: number | null;
+  ask?: number | null;
   volume: number;
 };
 
@@ -112,6 +114,8 @@ const buildMockNews = (query: string): NewsItem[] => {
 const toMarketPoint = (point: QuotePoint): MarketPoint => ({
   timestamp: new Date(point.ts * 1000).toISOString(),
   price: point.mid,
+  bid: point.bid ?? null,
+  ask: point.ask ?? null,
   volume: point.volume ?? 0,
 });
 
@@ -144,6 +148,8 @@ class MarketSocketManager {
         const point: MarketPoint = {
           timestamp: new Date(payload.ts * 1000).toISOString(),
           price: payload.mid,
+          bid: payload.bid,
+          ask: payload.ask,
           volume: 0,
         };
         handlers.forEach((handler) => handler(point));
