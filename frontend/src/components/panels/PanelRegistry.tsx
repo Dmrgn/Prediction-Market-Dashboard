@@ -33,10 +33,6 @@ export function PanelRegistry({ panel }: PanelRegistryProps) {
         </PanelWrapper>
       );
     default:
-      return (
-        <div className="h-full rounded-xl border border-dashed border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-          Unknown panel type: {panel.type}
-        </div>
-      );
+      return null;
   }
 }

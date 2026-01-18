@@ -550,6 +550,78 @@ export const backendInterface = {
       marketSocketManager.subscribeToOrderBook(id, handler),
     unsubscribeFromMarket: (id: string) => marketSocketManager.unsubscribeFromMarket(id),
     createAgentSocket: () => getAgentSocket(),
+
+    // Agent workflow methods
+    startAgent: (
+      prompt: string,
+      commands: Array<{
+        id: string;
+        label: string;
+        description?: string;
+        params?: Array<{ name: string; type: string; placeholder?: string }>;
+      }>,
+      handlers: {
+        onStep: (payload: {
+          reasoning: string;
+          actions: Array<{ command: string; params: Record<string, string> }>;
+          done: boolean;
+          model?: string;
+        }) => void;
+        onComplete: (payload: { summary: string; model?: string }) => void;
+        onError: (error: string) => void;
+      }
+    ): (() => void) => {
+      const socket = getAgentSocket();
+
+      const messageHandler = (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "agent_step") {
+            handlers.onStep(data.payload);
+          } else if (data.type === "agent_complete") {
+            handlers.onComplete(data.payload);
+          } else if (data.type === "error") {
+            handlers.onError(data.error);
+          }
+        } catch (e) {
+          console.error("[AgentSocket] Parse error:", e);
+        }
+      };
+
+      socket.addEventListener("message", messageHandler);
+
+      // Send start message once socket is open
+      const sendStart = () => {
+        socket.send(JSON.stringify({
+          op: "agent_start",
+          prompt,
+          commands,
+        }));
+      };
+
+      if (socket.readyState === WebSocket.OPEN) {
+        sendStart();
+      } else {
+        socket.addEventListener("open", sendStart, { once: true });
+      }
+
+      // Return cleanup function
+      return () => {
+        socket.removeEventListener("message", messageHandler);
+      };
+    },
+
+    sendObservation: (
+      results: Array<{ command: string; status: string; result?: string; panelId?: string }>
+    ): void => {
+      const socket = getAgentSocket();
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          op: "agent_observation",
+          results,
+        }));
+      }
+    },
   },
 };
 

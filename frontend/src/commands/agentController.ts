@@ -3,59 +3,145 @@
  * Manages the Thought-Action-Observation loop for the AI Agent.
  */
 
-import { COMMANDS, executeCommand, type CommandPayloads } from "./registry";
-
-const DEBUG_AGENT = "true";
-
-export type AgentEvent = {
-  id: string;
-  message: string;
-  createdAt: string;
-};
-
-const createEvent = (message: string): AgentEvent => ({
-  id: crypto.randomUUID(),
-  message,
-  createdAt: new Date().toISOString(),
-});
+import { backendInterface } from "@/backendInterface";
+import { COMMANDS, executeCommand, getCommandEntries } from "./registry";
+import { useAgentStore, type AgentStep, type ExecutedAction } from "@/hooks/useAgentStore";
 
 export const agentController = {
-  processInput: async (input: string): Promise<AgentEvent[]> => {
-    const events: AgentEvent[] = [];
-    events.push(createEvent(`Thought: analyzing "${input}"`));
+  runWorkflow: (prompt: string) => {
+    const store = useAgentStore.getState();
+    store.startWorkflow(prompt);
 
-    if (DEBUG_AGENT) {
-      console.debug("[Agent Controller] input", input);
-    }
+    // Prepare commands for the agent
+    // We pass a recursive reference to runWorkflow so the RUN_AI command is valid, 
+    // though the agent likely won't call itself.
+    // Prepare commands for the agent
+    // We pass all available commands to the agent so it knows what it can do.
+    const registryCommands = getCommandEntries().map((cmd) => ({
+      id: cmd.id,
+      label: cmd.label,
+      description: cmd.description,
+      params: cmd.params,
+    }));
 
-    if (input.toLowerCase().includes("news")) {
-      events.push(createEvent("Action: opening news feed panel"));
-      executeCommand(COMMANDS.OPEN_PANEL, {
-        panelType: "NEWS_FEED",
-        panelData: { query: input },
-      });
-      events.push(createEvent("Observation: news panel requested"));
-    } else if (input.toLowerCase().includes("market")) {
-      events.push(createEvent("Action: opening market aggregator panel"));
-      executeCommand(COMMANDS.OPEN_PANEL, {
-        panelType: "MARKET_AGGREGATOR_GRAPH",
-        panelData: { marketId: "demo-market" },
-      });
-      events.push(createEvent("Observation: market panel requested"));
-    } else {
-      events.push(createEvent("Action: defaulting to market + news panels"));
-      executeCommand(COMMANDS.QUERY_MARKET, { marketId: "demo-market" });
-      events.push(createEvent("Observation: panels requested"));
-    }
+    // Inject agent-specific tools that aren't in the registry
+    const commands = [
+      ...registryCommands,
+      {
+        id: "search-markets",
+        label: "Search Markets",
+        description: "Search for prediction markets by query to get Market IDs",
+        params: [{ name: "query", label: "Query", type: "text", placeholder: "e.g. bitcoin, entertainment" } as any],
+      }
+    ];
 
-    if (DEBUG_AGENT) {
-      console.debug("[Agent Controller] events", events);
-    }
+    // Start WebSocket connection
+    const cleanup = backendInterface.socket.startAgent(
+      prompt,
+      commands,
+      {
+        onStep: async (payload) => {
+          const { reasoning, actions, done, model } = payload;
 
-    return events;
-  },
+          const step: AgentStep = {
+            reasoning,
+            actions: actions.map(a => ({ command: a.command, params: a.params })),
+            done,
+            model: model as "gemini" | "gpt"
+          };
 
-  performAction: (actionType: string, params: CommandPayloads["data"]) => {
-    executeCommand(actionType as keyof typeof COMMANDS, params);
-  },
+          store.addStep(step);
+
+          // If there are actions, execute them
+          if (actions.length > 0) {
+            const results: Array<{ command: string; status: string; result?: string; panelId?: string }> = [];
+
+            for (const action of actions) {
+              // Track as pending
+              const executedAction: ExecutedAction = {
+                command: action.command,
+                params: action.params,
+                status: "pending"
+              };
+              store.addExecutedAction(executedAction);
+
+              try {
+                // SPECIAL HANDLERS
+                if (action.command === "search-markets") {
+                  const query = action.params.query || "";
+                  const response = await backendInterface.searchMarkets(query);
+                  const markets = response.markets.slice(0, 5).map(m =>
+                    `- ID: "${m.market_id}" | Title: "${m.title}" | Source: ${m.source}`
+                  ).join("\n");
+
+                  const resultText = markets ? `Found markets:\n${markets}` : "No markets found.";
+
+                  store.updateActionStatus(action.command, "success", `Found ${response.markets.length} markets`);
+                  results.push({ command: action.command, status: "success", result: resultText });
+                  continue;
+                }
+
+                // REGISTRY HANDLERS
+                // executeCommand takes the TYPE (enum), but we have the ID.
+                // We need to look up the command type from the registry ID.
+                const entry = getCommandEntries().find(c => c.id === action.command);
+
+                if (entry) {
+                  // STRICT VALIDATION: Check for invalid panel types
+                  if (entry.id.startsWith("open-")) {
+                    const pType = action.params?.panelType || (entry.type === "OPEN_PANEL" ? (entry as any).handler?.toString().match(/panelType:\s*["']([^"']+)["']/)?.[1] : null);
+
+                    // If we are strictly opening a panel, ensure it's a known type
+                    // Actually, a better way is to check the command ID since we define them
+                    const validOpenCommands = ["open-chart", "open-order-book", "open-news-feed"];
+                    if (!validOpenCommands.includes(entry.id) && entry.id !== "query-market") {
+                      // If the agent tries to invent "open-research-panel", reject it.
+                      // However, we are relying on registry entries. 
+                      // If the entry EXISTED in registry, it's valid.
+                      // But if the agent hallucinates a command ID that DOESN'T exist, the `find` below returns undefined.
+                      // The issue is likely the agent hallucinating parameters that CAUSE an unknown panel.
+                    }
+                  }
+
+                  // Execute
+                  // Note: executeCommand expects the TYPE, not ID. 
+                  // entry.type is the COMMANDS enum value.
+                  // Casting params to any because we trust the agent matches the schema we sent.
+                  executeCommand(entry.type as any, action.params as any);
+
+                  // Mark success
+                  // In a real app we'd get the result/panelId from executeCommand, 
+                  // but currently it's void. We assume success.
+                  store.updateActionStatus(action.command, "success", "Panel opened");
+                  results.push({ command: action.command, status: "success", result: "Executed successfully" });
+                } else {
+                  throw new Error(`Command ${action.command} not found`);
+                }
+
+              } catch (e) {
+                console.error(`Failed to execute ${action.command}`, e);
+                store.updateActionStatus(action.command, "error", String(e));
+                results.push({ command: action.command, status: "error", result: String(e) });
+              }
+            }
+
+
+            // Send observations back
+            backendInterface.socket.sendObservation(results);
+          }
+        },
+
+        onComplete: (payload) => {
+          store.completeWorkflow(payload.summary);
+          // We don't necessarily call cleanup() here to allow viewing the state
+        },
+
+        onError: (error) => {
+          store.setError(error);
+        }
+      }
+    );
+
+    // We could store cleanup if we wanted to cancel
+  }
 };

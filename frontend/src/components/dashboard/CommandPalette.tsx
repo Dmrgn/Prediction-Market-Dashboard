@@ -75,7 +75,9 @@ const createEmptySubPalette = (): SubPaletteState => ({
 
 export function CommandPalette() {
   const { isCommandPaletteOpen: isOpen, closeCommandPalette: onClose, initialCommandId, initialParams, openSidebar } = useUIStore();
-  const { events: agentEvents, addEvents } = useAgentStore();
+
+  // Use new agent store state if needed, or just trigger via controller
+  // const { isRunning } = useAgentStore(); 
 
   const [search, setSearch] = useState("");
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
@@ -110,13 +112,8 @@ export function CommandPalette() {
   const subPaletteInputRef = useRef<HTMLInputElement | null>(null);
 
   const entries = useMemo(
-    () =>
-      getCommandEntries(async (prompt) => {
-        const events = await agentController.processInput(prompt);
-        addEvents(events);
-        setAgentCommandRan(true);
-      }),
-    [addEvents]
+    () => getCommandEntries(),
+    []
   );
 
   const commandMap = useMemo(() => new Map(entries.map((entry) => [entry.id, entry])), [entries]);
@@ -865,20 +862,7 @@ export function CommandPalette() {
             </div>
           </div>
 
-          <div className="border-t border-border p-4">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Agent Activity</div>
-            {agentEvents.length === 0 ? (
-              <div className="mt-2 text-xs text-muted-foreground">No agent activity yet.</div>
-            ) : (
-              <div className="mt-2 space-y-2">
-                {agentEvents.map((event) => (
-                  <div key={event.id} className="rounded-lg bg-muted px-3 py-2 text-xs">
-                    {event.message}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+
         </Command>
       </div>
 
