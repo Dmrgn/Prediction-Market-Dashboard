@@ -50,6 +50,7 @@ const createEmptySubPalette = (): SubPaletteState => ({
   paramIndex: 0,
 });
 
+
 export function CommandPalette() {
   const { isCommandPaletteOpen: isOpen, closeCommandPalette: onClose, initialCommandId, initialParams, openSidebar } = useUIStore();
   const { events: agentEvents, addEvents } = useAgentStore();
@@ -589,9 +590,8 @@ export function CommandPalette() {
                         key={option.value}
                         type="button"
                         onClick={() => handleSubPaletteSelect(option)}
-                        className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
-                          index === subPaletteIndex ? "bg-muted" : "hover:bg-muted"
-                        }`}
+                        className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${index === subPaletteIndex ? "bg-muted" : "hover:bg-muted"
+                          }`}
                       >
                         <div className="font-medium text-foreground">{option.label}</div>
                         {option.description && (

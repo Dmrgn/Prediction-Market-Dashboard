@@ -29,7 +29,7 @@ type Market = {
 };
 
 type MarketSearchResponse = {
-  markets: Market,
+  markets: Market[],
   facets: {
     sectors: Record<string, number>,
     sources: { polymarket: 0, kalshi: 0 },
