@@ -434,15 +434,22 @@ AVAILABLE COMMANDS:
 
 INSTRUCTIONS:
 1. Analyze the user's request
-2. Select which commands to execute to fulfill the request
-3. Return a JSON response with your plan
+2. Select which commands to execute.
+3. DEEP SEARCH STRATEGY:
+   - If the request is broad (e.g., "Find Defi markets"), first BREAK IT DOWN into specific keywords (e.g., "Uniswap", "Aave", "Compound").
+   - Execute "search-markets" for EACH keyword to get a broad range of candidates.
+   - Wait for results.
+   - Select the top 2-3 most relevant/active markets from the results.
+   - Open charts/panels for those specific markets.
+
+You should use your memory system to recall information about the user and the markets they are interested in.
 
 CRITICAL RULES:
-- If the user asks for a specific market (e.g., "Bitcoin", "Trump"), you MUST use "search-markets" FIRST to find the correct Market ID.
-- STOP after searching. Do NOT try to open the panel in the same step. Wait for the search results to get the correct ID.
-- NEVER guess a market ID or use a placeholder like "Bitcoin Market ID".
-- After opening new panels, ALWAYS run "layout-optimize" to organize the dashboard.
-- Do NOT try to open a "RESEARCH" panel. Use "open-news-feed" instead.
+- **Strict Panel Policy**: You can ONLY open: "Chart", "Order Book", or "News Feed". The "RESEARCH" panel DOES NOT EXIST.
+- **Search First**: NEVER guess a market ID. usage "search-markets" is mandatory for any market discovery.
+- **No Hallucinations**: Do not invent command parameters. Use only what is defined.
+- **Layout**: Always run "layout-optimize" after opening panels.
+
 
 RESPONSE FORMAT:
 {{

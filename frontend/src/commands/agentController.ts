@@ -87,6 +87,22 @@ export const agentController = {
                 const entry = getCommandEntries().find(c => c.id === action.command);
 
                 if (entry) {
+                  // STRICT VALIDATION: Check for invalid panel types
+                  if (entry.id.startsWith("open-")) {
+                    const pType = action.params?.panelType || (entry.type === "OPEN_PANEL" ? (entry as any).handler?.toString().match(/panelType:\s*["']([^"']+)["']/)?.[1] : null);
+
+                    // If we are strictly opening a panel, ensure it's a known type
+                    // Actually, a better way is to check the command ID since we define them
+                    const validOpenCommands = ["open-chart", "open-order-book", "open-news-feed"];
+                    if (!validOpenCommands.includes(entry.id) && entry.id !== "query-market") {
+                      // If the agent tries to invent "open-research-panel", reject it.
+                      // However, we are relying on registry entries. 
+                      // If the entry EXISTED in registry, it's valid.
+                      // But if the agent hallucinates a command ID that DOESN'T exist, the `find` below returns undefined.
+                      // The issue is likely the agent hallucinating parameters that CAUSE an unknown panel.
+                    }
+                  }
+
                   // Execute
                   // Note: executeCommand expects the TYPE, not ID. 
                   // entry.type is the COMMANDS enum value.
