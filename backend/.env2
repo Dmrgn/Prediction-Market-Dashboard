@@ -1,0 +1,23 @@
+# EXA.ai: Agent-based news finder. Very detailed & reliable
+EXA=9396fc2e-dee8-4787-b84f-758aafc8d251
+
+# newsdata.io: General News, very reliable
+NDIO=pub_07850d230de745c49b5ab32a0a00c22c
+
+# FinancialModellingPrep API
+# FMP=9xt09zU0oEzPYpKJkOQ5Sghs2freoORK
+# (Authorize with apikey=9xt09zU0oEzPYpKJkOQ5Sghs2freoORK)
+# Very NLP-suitable
+# Got rid of it b/c of limits
+
+# LunarCrush (General crypto + sports)
+LC=n8wdm087cln94efsk4pltyj2fmkhw4yvjbsmct4r
+
+# CryptoPanic
+CPANIC=6250c2cb0377a0ec02c075f538532a269f976f70
+
+# OpenRouter
+OPENROUTER_API_KEY=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
+
+BACKBOARD=espr_uQJ_FWBc6vud3Vxb40ijTDq3E-FmAGp3_taQ-v86thI
+

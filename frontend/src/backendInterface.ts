@@ -134,6 +134,14 @@ type SentimentReport = {
   generated_at: string;
 };
 
+type CrossMarketComparison = {
+  source_market: { market_id: string; title: string; source: string };
+  similar_market: { market_id: string; title: string; source: string } | null;
+  similar_markets?: Array<{ market_id: string; title: string; source: string; score: number }>;
+  similarity_score: number;
+  method: "embedding" | "text";
+};
+
 type NewsSearchParams = {
   query: string;
   providers?: string[];
@@ -332,7 +340,11 @@ let agentSocket: WebSocket | null = null;
 
 const getAgentSocket = () => {
   if (!agentSocket || agentSocket.readyState === WebSocket.CLOSED) {
+    console.log("[Agent Socket] Creating new socket to:", WS_BASE_URL);
     agentSocket = new WebSocket(WS_BASE_URL);
+    agentSocket.addEventListener("open", () => console.log("[Agent Socket] Connected!"));
+    agentSocket.addEventListener("error", (e) => console.error("[Agent Socket] Error:", e));
+    agentSocket.addEventListener("close", (e) => console.log("[Agent Socket] Closed:", e.code, e.reason));
   }
   return agentSocket;
 };
@@ -379,6 +391,11 @@ export const backendInterface = {
   fetchRelatedMarket: async (id: string): Promise<Market> => {
     if (!id) throw new Error("Market ID is required");
     return fetchJson<Market>(buildUrl(`/markets/${id}/related`));
+  },
+
+  fetchCrossMarketComparison: async (id: string): Promise<CrossMarketComparison> => {
+    if (!id) throw new Error("Market ID is required");
+    return fetchJson<CrossMarketComparison>(buildUrl(`/markets/${id}/compare`));
   },
 
   fetchOrderbook: async (id: string, outcomeId: string): Promise<OrderBook> => {
@@ -537,6 +554,7 @@ export const backendInterface = {
 };
 
 export type {
+  CrossMarketComparison,
   Event,
   EventSearchResult,
   Market,

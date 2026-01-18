@@ -470,6 +470,42 @@ class LLMService:
                 print(f"[LLMService] Failed to parse suggestions: {e}")
             return {}
     
+    async def generate_market_search_queries(self, title: str, target_platform: str) -> List[str]:
+        """
+        Generate search queries to find a market on a different platform.
+        
+        Args:
+            title: Title of the market
+            target_platform: Platform we are searching on (e.g. 'Kalshi', 'Polymarket')
+            
+        Returns:
+            List of search query strings
+        """
+        prompt = f"""
+Given the prediction market title "{title}", suggest 3 short, effective search queries to find the EQUIVALENT market on {target_platform}.
+The market might be phrased differently (e.g. "Will Trump win" vs "Presidential Election Winner").
+Focus on the core entities and event.
+Return ONLY a valid JSON array of strings. Do not output markdown.
+Example: ["Donald Trump", "US Election 2024", "Presidential Winner"]
+"""
+        try:
+            response = await self._call_openrouter(prompt)
+            # clean response locally to be safe
+            cleaned = response.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:-3]
+            elif cleaned.startswith("```"):
+                cleaned = cleaned[3:-3]
+            
+            queries = json.loads(cleaned)
+            if isinstance(queries, list):
+                return [str(q) for q in queries][:3]
+            return []
+        except Exception as e:
+            if DEBUG_LLM:
+                print(f"[LLM] Failed to generate search queries: {e}")
+            return []
+
     def get_history_stats(self) -> Dict:
         """Get statistics about command history."""
         command_counts = {}

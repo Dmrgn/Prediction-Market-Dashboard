@@ -120,7 +120,9 @@ export function CommandPalette() {
   const commandMap = useMemo(() => new Map(entries.map((entry) => [entry.id, entry])), [entries]);
 
   useEffect(() => {
+    console.log("[Agent WS] Creating socket...");
     const socket = backendInterface.socket.createAgentSocket();
+    console.log("[Agent WS] Socket created, readyState:", socket.readyState);
 
     const handleMessage = (event: MessageEvent) => {
       try {
@@ -372,14 +374,12 @@ export function CommandPalette() {
   };
 
   useEffect(() => {
-    if (DEBUG_AGENT) {
-      console.debug("[Agent Trigger]", {
-        focusMode,
-        activeEntry: activeEntry?.id,
-        params: activeEntry?.params?.length ?? 0,
-        socketReadyState: agentSocket?.readyState,
-      });
-    }
+    console.log("[Agent Trigger] Effect running:", {
+      focusMode,
+      activeEntry: activeEntry?.id,
+      params: activeEntry?.params?.length ?? 0,
+      socketReadyState: agentSocket?.readyState,
+    });
 
     if (!activeEntry || focusMode !== "list") return;
 

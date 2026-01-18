@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MarketSearchInput } from "@/components/shared/MarketSearchInput";
+import { CrossMarketBadge } from "@/components/shared/CrossMarketBadge";
 import { PanelMenu } from "./PanelMenu";
 
 interface ChartPanelProps {
@@ -267,11 +268,19 @@ export function ChartPanel({ panel }: ChartPanelProps) {
                 </h3>
                 <Search className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
               </button>
-              {sourceLabel && (
-                <span className="inline-flex items-center rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground mt-1 w-fit">
-                  {sourceLabel}
-                </span>
-              )}
+              <div className="flex items-center gap-2 mt-1">
+                {sourceLabel && (
+                  <span className="inline-flex items-center rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground w-fit">
+                    {sourceLabel}
+                  </span>
+                )}
+                {market && (
+                  <CrossMarketBadge
+                    marketId={market.market_id}
+                    onNavigate={(id) => updatePanel(panel.id, { marketId: id })}
+                  />
+                )}
+              </div>
               {/* Modal Search */}
               <MarketSearchInput
                 isOpen={showSearch}

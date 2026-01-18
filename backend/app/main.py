@@ -8,6 +8,7 @@ from .connectors.polymarket import PolymarketConnector
 from .connectors.kalshi import KalshiConnector
 from .ai.agent import AgentService
 from .ai.llm_service import LLMService
+from .ai.embedding_service import EmbeddingService
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -68,6 +69,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Failed to initialize LLM Service: {e}")
         app.state.llm = None
+    
+    # Initialize Embedding Service (for cross-market comparison)
+    print("Initializing Embedding Service...")
+    try:
+        embedding_service = EmbeddingService()
+        app.state.embedding = embedding_service
+        print(f"Embedding Service initialized with model: {embedding_service.model}")
+    except ValueError as e:
+        # Missing OPENROUTER_API_KEY - embedding service will be unavailable
+        print(f"Embedding Service not initialized: {e}")
+        app.state.embedding = None
+    except Exception as e:
+        print(f"Failed to initialize Embedding Service: {e}")
+        app.state.embedding = None
+
     
     # Initialize SubscriptionManager
     from .manager import SubscriptionManager
