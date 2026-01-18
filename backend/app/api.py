@@ -393,6 +393,112 @@ async def get_related_market(market_id: str):
     from .matching import find_related_market
     return find_related_market(market, all_markets)
 
+
+@router.get("/markets/{market_id}/compare")
+async def get_cross_market_comparison(
+    request: Request,
+    market_id: str,
+):
+    """
+    Find the most similar market on the opposing platform using semantic embeddings.
+    
+    Returns:
+        {
+            "source_market": { market_id, title, source },
+            "similar_market": { market_id, title, source } | null,
+            "similarity_score": float,
+            "method": "embedding" | "text"
+        }
+    """
+    market = state.get_market(market_id)
+    if not market:
+        raise HTTPException(status_code=404, detail="Market not found")
+    
+    # Get connectors from app state
+    poly = getattr(request.app.state, "poly", None)
+    kalshi = getattr(request.app.state, "kalshi", None)
+    embedding_service = getattr(request.app.state, "embedding", None)
+    llm_service = getattr(request.app.state, "llm", None)
+    
+    source_market = {
+        "market_id": market.market_id,
+        "title": market.title,
+        "source": market.source,
+    }
+    
+    # Try embedding-based matching first
+    if embedding_service and poly and kalshi:
+        from .matching import find_similar_market_embedding
+        try:
+            results = await find_similar_market_embedding(
+                target_market=market,
+                embedding_service=embedding_service,
+                kalshi_connector=kalshi,
+                polymarket_connector=poly,
+                llm_service=llm_service,
+                threshold=0.60, # Slightly lower threshold since we sort by score
+            )
+            
+            if results:
+                # results is List[Tuple[Market, float]]
+                # Backend Compatibility: similar_market is the top match
+                top_match, top_score = results[0]
+                
+                similar_markets_list = [
+                    {
+                        "market_id": m.market_id,
+                        "title": m.title,
+                        "source": m.source,
+                        "score": round(s, 3),
+                    }
+                    for m, s in results
+                ]
+                
+                return {
+                    "source_market": source_market,
+                    "similar_market": {
+                        "market_id": top_match.market_id,
+                        "title": top_match.title,
+                        "source": top_match.source,
+                    },
+                    "similar_markets": similar_markets_list,
+                    "similarity_score": round(top_score, 3),
+                    "method": "embedding",
+                }
+        except Exception as e:
+            print(f"[API] Embedding comparison error: {e}")
+    
+    # Fallback to text-based matching
+    all_markets = state.get_all_markets()
+    from .matching import find_related_market
+    fallback_match = find_related_market(market, all_markets)
+    
+    if fallback_match:
+        return {
+            "source_market": source_market,
+            "similar_market": {
+                "market_id": fallback_match.market_id,
+                "title": fallback_match.title,
+                "source": fallback_match.source,
+            },
+            "similar_markets": [{
+                "market_id": fallback_match.market_id,
+                "title": fallback_match.title,
+                "source": fallback_match.source,
+                "score": 0.5,  # Default score for text matching
+            }],
+            "similarity_score": 0.0,  # Text-based doesn't provide a score
+            "method": "text",
+        }
+    
+    return {
+        "source_market": source_market,
+        "similar_market": None,
+        "similarity_score": 0.0,
+        "method": "text",
+    }
+
+
 class SuggestionCache:
     def __init__(self, ttl_seconds: int = 30):
         self.ttl = timedelta(seconds=ttl_seconds)
