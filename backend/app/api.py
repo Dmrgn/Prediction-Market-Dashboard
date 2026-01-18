@@ -13,8 +13,20 @@ from .schemas import Market, OrderBook, QuotePoint, Event, EventSearchResult
 from .news.fetcher import news_fetcher  # type: ignore
 from .news.rank import rank_articles
 from .search_helper import search_markets as search_markets_helper
+from .services.researcher import research_market, ResearchReport
+from .ai.llm_service import LLMService
 
 DEBUG_WS = True
+
+# LLM Service singleton for researcher
+_llm_service: Optional[LLMService] = None
+
+def get_llm_service() -> LLMService:
+    """Lazy initialization of LLMService singleton."""
+    global _llm_service
+    if _llm_service is None:
+        _llm_service = LLMService()
+    return _llm_service
 
 router = APIRouter()
 state = StateManager()
@@ -790,3 +802,53 @@ async def search_news(
     articles = rank_articles(articles, query=q, dedupe=True)
     
     return articles
+
+
+@router.get("/markets/{market_id}/sentiment")
+async def get_market_sentiment(
+    request: Request,
+    market_id: str,
+    q: Optional[str] = None,
+):
+    """
+    Generate sentiment analysis for a market.
+    
+    Query param `q` overrides the market title as the search term.
+    
+    WARNING: This is an expensive operation (multiple LLM calls).
+    Results should be cached for 15-60 minutes.
+    """
+    # Get pre-initialized LLM service from app state
+    llm = getattr(request.app.state, "llm", None)
+    if not llm:
+        raise HTTPException(status_code=503, detail="LLM service not available")
+    
+    # Resolve market to get search terms
+    market = state.get_market(market_id)
+    if not market and not q:
+        raise HTTPException(status_code=404, detail="Market not found. Provide ?q= parameter.")
+    
+    query = q or market.title
+    
+    try:
+        report = await research_market(
+            llm=llm,
+            market_id=market_id,
+            query=query,
+            max_articles=50,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Research failed: {e}")
+    
+    return {
+        "market_id": report.market_id,
+        "query": report.query,
+        "score": report.aggregate_score,
+        "signal": report.signal,
+        "summary": report.summary,
+        "articles_analyzed": report.articles_analyzed,
+        "top_positive": report.top_positive_headlines,
+        "top_negative": report.top_negative_headlines,
+        "generated_at": report.generated_at,
+    }
+

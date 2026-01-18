@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import "./index.css";
 import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
 import { CommandPalette } from "@/components/dashboard/CommandPalette";
 import { AgentStatus } from "@/components/dashboard/AgentStatus";
+import { ResearcherPanel } from "@/components/dashboard/ResearcherPanel";
 import { useWorkspaceStore, type PanelInstance } from "@/hooks/useWorkspaceStore";
 import { useUIStore } from "@/hooks/useUIStore";
 import { Kbd } from "./components/ui/kbd";
@@ -27,6 +28,7 @@ function AppContent() {
 
   const { openCommandPalette, closeCommandPalette, isCommandPaletteOpen, isSidebarOpen, setSidebarOpen } = useUIStore();
   const { open } = useSidebar();
+  const [sidebarTab, setSidebarTab] = useState<"agent" | "research">("research");
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -78,9 +80,31 @@ function AppContent() {
       </main>
 
       <Sidebar side="right" variant="floating">
-        <SidebarHeader />
+        <SidebarHeader className="p-2">
+          <div className="flex rounded-lg bg-muted p-1">
+            <button
+              onClick={() => setSidebarTab("research")}
+              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${sidebarTab === "research"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+                }`}
+            >
+              Research
+            </button>
+            <button
+              onClick={() => setSidebarTab("agent")}
+              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${sidebarTab === "agent"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+                }`}
+            >
+              Agent
+            </button>
+          </div>
+        </SidebarHeader>
         <SidebarContent>
-          <AgentStatus />
+          {sidebarTab === "agent" && <AgentStatus />}
+          {sidebarTab === "research" && <ResearcherPanel />}
         </SidebarContent>
         <SidebarFooter />
       </Sidebar>
