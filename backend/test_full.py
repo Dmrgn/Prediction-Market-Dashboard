@@ -307,6 +307,60 @@ async def test_aggregated_display():
         log_pass(f"Kalshi view: {data['total']} markets")
 
 
+async def test_search_events():
+    """Test unified smart search (events + markets) with volume scoring"""
+    log_section("SMART SEARCH & EVENTS TESTS")
+    
+    async with httpx.AsyncClient(base_url=BASE_URL, timeout=30.0) as client:
+        # Test 1: Search for a broad topic likely to have events
+        keyword = "trump" 
+        log_info(f"Test 1: Search events for '{keyword}'")
+        
+        resp = await client.get("/events/search", params={"q": keyword})
+        if resp.status_code != 200:
+            log_fail(f"Event search failed: {resp.status_code}")
+            return
+            
+        data = resp.json()
+        events = data.get("events", [])
+        markets = data.get("markets", [])
+        
+        log_info(f"Received {len(events)} events and {len(markets)} standalone markets")
+        
+        if not events and not markets:
+            log_fail("No results found for common keyword 'trump'")
+        else:
+            log_pass(f"Search returned results: {len(events)} events, {len(markets)} markets")
+            
+        # Test 2: Verify Volume Extraction
+        has_volume = False
+        for e in events:
+            for m in e["markets"]:
+                if m.get("volume_24h", 0) > 0:
+                    has_volume = True
+                    break
+        for m in markets:
+            if m.get("volume_24h", 0) > 0:
+                has_volume = True
+                
+        if has_volume:
+            log_pass(f"Volume data found in results (24h volume > 0)")
+        else:
+            log_fail("No volume data found (all zeros), smart scoring might be ineffective")
+            
+        # Test 3: Platform Balance (Soft check)
+        sources = set()
+        for e in events:
+            sources.add(e["source"])
+        for m in markets:
+            sources.add(m["source"])
+            
+        if len(sources) > 1:
+            log_pass(f"Results contain mix of platforms: {list(sources)}")
+        else:
+            log_info(f"Results dominated by single platform: {list(sources)} (may be expected if one platform has no matches)")
+
+
 async def main():
     print(f"\n{Colors.BLUE}{'='*60}")
     print("  PREDICTION MARKET DASHBOARD - FULL BACKEND TEST")
@@ -346,9 +400,12 @@ async def main():
             log_fail("Markets did not load in time")
             return
 
+    
     # Run all tests
     await test_search()
+    await test_search_events()
     await test_orderbook()
+    # ... rest of main
     await test_history()
     await test_websocket_streaming()
     await test_aggregated_display()

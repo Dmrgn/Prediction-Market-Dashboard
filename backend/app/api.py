@@ -6,7 +6,7 @@ from typing import List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from .state import StateManager
-from .schemas import Market, OrderBook, QuotePoint
+from .schemas import Market, OrderBook, QuotePoint, Event, EventSearchResult
 from .news.fetcher import news_fetcher  # type: ignore
 from .news.rank import rank_articles
 
@@ -115,12 +115,129 @@ async def search_markets(
         "facets": facets
     }
 
+@router.get("/events/search", response_model=EventSearchResult)
+async def search_events(
+    request: Request,
+    q: str,
+    source: Optional[str] = None,
+    limit: int = 20,
+):
+    """
+    Search for events across both platforms.
+    Returns events (multi-market groups) and standalone markets.
+    
+    Uses smart keyword extraction for natural language queries.
+    """
+    all_events = []
+    all_standalone = []
+    
+    poly = getattr(request.app.state, "poly", None)
+    kalshi = getattr(request.app.state, "kalshi", None)
+    
+    # Search both platforms in parallel
+    tasks = []
+    
+    if poly and (not source or source == "polymarket"):
+        tasks.append(("polymarket", poly.search_events(q)))
+    
+    if kalshi and (not source or source == "kalshi"):
+        tasks.append(("kalshi", kalshi.search_events(q)))
+    
+    # Execute searches
+    for platform, task in tasks:
+        try:
+            events, standalone = await task
+            all_events.extend(events)
+            all_standalone.extend(standalone)
+        except Exception as e:
+            print(f"[{platform}] Event search error: {e}")
+    
+    # Sort events by number of markets (more markets = more relevant)
+    # all_events.sort(key=lambda e: len(e.markets), reverse=True)
+    
+    # === SMART SCORING ===
+    def calculate_score(item, query_keywords):
+        score = 0
+        title = item.title.lower()
+        
+        # Keyword relevance
+        matches = sum(1 for k in query_keywords if k in title)
+        score += matches * 10
+        
+        if query_keywords and query_keywords[0] in title: 
+             score += 5 # Bonus for first keyword match
+             
+        # Volume weighting (log-ish scale)
+        # Use max volume of markets for events
+        vol = 0
+        if isinstance(item, Event):
+             vol = sum(m.volume_24h for m in item.markets)
+        else:
+             vol = item.volume_24h
+             
+        if vol > 0:
+            import math
+            score += min(math.log(vol + 1, 10) * 5, 30) # Max 30 pts for volume
+
+        return score
+
+    keywords = q.lower().split()
+    
+    # Score all items
+    scored_events = [(e, calculate_score(e, keywords)) for e in all_events]
+    scored_markets = [(m, calculate_score(m, keywords)) for m in all_standalone]
+    
+    # Sort by score DESC
+    scored_events.sort(key=lambda x: x[1], reverse=True)
+    scored_markets.sort(key=lambda x: x[1], reverse=True)
+    
+    # Flatten back
+    final_events = [x[0] for x in scored_events]
+    final_markets = [x[0] for x in scored_markets]
+    
+    # Ensure balance: If we have results from both platforms, try to show at least 2 from each in top 10
+    # But only if we have them. (Complex to re-sort, so for now rely on scoring but volume boost helps)
+    
+    return EventSearchResult(
+        events=final_events[:limit],
+        markets=final_markets[:limit],
+        total=len(final_events) + len(final_markets)
+    )
+
 @router.get("/markets/{market_id}", response_model=Market)
-async def get_market(market_id: str):
+async def get_market(request: Request, market_id: str):
+    # Try direct lookup first
     market = state.get_market(market_id)
-    if not market:
-        raise HTTPException(status_code=404, detail="Market not found")
-    return market
+    if market:
+        return market
+    
+    # If it looks like a Polymarket slug (no 0x prefix, contains letters), try slug lookup
+    if not market_id.startswith("0x") and not market_id.startswith("KX"):
+        poly = getattr(request.app.state, "poly", None)
+        if poly:
+            markets = await poly.fetch_by_slug(market_id)
+            if markets:
+                # Return the first market from the event
+                return markets[0]
+    
+    raise HTTPException(status_code=404, detail="Market not found")
+
+@router.get("/events/{slug}/markets", response_model=List[Market])
+async def get_event_markets(request: Request, slug: str):
+    """
+    Fetch all markets from a Polymarket event by its URL slug.
+    
+    E.g., GET /events/us-strikes-iran-by/markets
+    """
+    poly = getattr(request.app.state, "poly", None)
+    if not poly:
+        raise HTTPException(status_code=503, detail="Polymarket connector not available")
+    
+    markets = await poly.fetch_by_slug(slug)
+    if not markets:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    return markets
 
 @router.get("/markets/{market_id}/history", response_model=List[QuotePoint])
 async def get_market_history(

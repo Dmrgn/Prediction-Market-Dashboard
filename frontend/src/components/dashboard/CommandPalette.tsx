@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { agentController } from "@/commands/agentController";
 import { useUIStore } from "@/hooks/useUIStore";
 import { useAgentStore } from "@/hooks/useAgentStore";
+import { MarketSearchInput } from "@/components/shared/MarketSearchInput";
 
 type FocusMode = "list" | "param" | "run";
 
@@ -16,6 +17,7 @@ type SubPaletteOption = {
   value: string;
   label: string;
   description?: string;
+  meta?: any;
 };
 
 type SubPaletteState = {
@@ -180,14 +182,48 @@ export function CommandPalette() {
     let active = true;
     debounceRef.current = window.setTimeout(() => {
       backendInterface
-        .fetchMarkets(query)
-        .then((markets) => {
+        .searchEvents(query)
+        .then((result) => {
           if (!active) return;
-          const options = markets.markets.map((market) => ({
-            value: market.market_id,
-            label: market.title,
-            description: `${market.source} • ${market.market_id.slice(0, 8)}…`,
-          }));
+
+          // Flatten events into individual market options, grouped by event
+          const options: SubPaletteOption[] = [];
+
+          // Add markets from events
+          for (const event of result.events) {
+            for (const market of event.markets) {
+              // Try to make a nice label
+              // e.g. "Fed Rate: No Change"
+              let label = market.title;
+              if (label.startsWith(event.title)) {
+                label = event.title + ": " + label.slice(event.title.length).replace(/^[ -]+/, "");
+              }
+
+              options.push({
+                value: market.market_id,
+                label: label,
+                description: `${event.source.toUpperCase()} • ${event.title}`,
+                meta: {
+                  source: event.source,
+                  price: market.outcomes?.[0]?.price
+                }
+              });
+            }
+          }
+
+          // Add standalone markets
+          for (const market of result.markets) {
+            options.push({
+              value: market.market_id,
+              label: market.title,
+              description: `${market.source.toUpperCase()} • standalone`,
+              meta: {
+                source: market.source,
+                price: market.outcomes?.[0]?.price
+              }
+            });
+          }
+
           setSubPalette((prev) => ({
             ...prev,
             options,
@@ -195,7 +231,8 @@ export function CommandPalette() {
             emptyMessage: options.length ? "" : "No markets found",
           }));
         })
-        .catch(() => {
+        .catch((err) => {
+          console.error("Market search error:", err);
           if (!active) return;
           setSubPalette((prev) => ({
             ...prev,
@@ -551,7 +588,26 @@ export function CommandPalette() {
           </div>
         </Command>
 
-        {subPalette.open && (
+        {subPalette.open && subPalette.type === 'market' ? (
+          <MarketSearchInput
+            isOpen={subPalette.open}
+            onOpenChange={(open) => {
+              if (!open) closeSubPalette(true);
+            }}
+            onSelect={(market) => {
+              // Construct a mock option to reuse existing handler
+              const option: SubPaletteOption = {
+                value: market.market_id,
+                label: market.title,
+                meta: {
+                  source: market.source
+                }
+              };
+              handleSubPaletteSelect(option);
+            }}
+            autoClose={false}
+          />
+        ) : subPalette.open && (
           <div
             className="fixed inset-0 z-[60] flex items-start justify-center bg-black/40 p-6"
             onKeyDown={handleSubPaletteKeyDown}
@@ -563,9 +619,7 @@ export function CommandPalette() {
                   <Input
                     ref={subPaletteInputRef}
                     value={subPalette.query}
-                    placeholder={
-                      subPalette.type === "market" ? "Search markets..." : "Search options..."
-                    }
+                    placeholder="Search options..."
                     onChange={(event) =>
                       setSubPalette((prev) => ({
                         ...prev,
@@ -575,6 +629,7 @@ export function CommandPalette() {
                   />
                 </div>
               </div>
+
               <div className="max-h-64 overflow-y-auto p-2">
                 {subPalette.loading ? (
                   <div className="p-4 text-sm text-muted-foreground">Searching…</div>
@@ -589,9 +644,8 @@ export function CommandPalette() {
                         key={option.value}
                         type="button"
                         onClick={() => handleSubPaletteSelect(option)}
-                        className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
-                          index === subPaletteIndex ? "bg-muted" : "hover:bg-muted"
-                        }`}
+                        className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${index === subPaletteIndex ? "bg-muted" : "hover:bg-muted"
+                          }`}
                       >
                         <div className="font-medium text-foreground">{option.label}</div>
                         {option.description && (

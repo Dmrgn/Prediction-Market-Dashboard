@@ -19,6 +19,8 @@ class Market(BaseModel):
     outcomes: List[Outcome] = []
     status: str = "active"
     image_url: Optional[str] = None
+    volume_24h: float = 0.0
+    liquidity: float = 0.0
 
 class QuotePoint(BaseModel):
     ts: float
@@ -54,3 +56,18 @@ class OrderBookMessage(BaseModel):
     ts: float
     bids: List[OrderBookLevel]
     asks: List[OrderBookLevel]
+
+class Event(BaseModel):
+    """An event containing multiple related markets."""
+    event_id: str
+    title: str
+    description: Optional[str] = None
+    source: Literal["polymarket", "kalshi"]
+    slug: Optional[str] = None
+    markets: List[Market] = []
+
+class EventSearchResult(BaseModel):
+    """Search result with both events and standalone markets."""
+    events: List[Event] = []
+    markets: List[Market] = []  # Standalone markets not part of an event
+    total: int = 0

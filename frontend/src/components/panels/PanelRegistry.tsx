@@ -4,6 +4,9 @@ import { OrderBookPanel } from "@/components/panels/OrderBookPanel";
 import { NewsFeedPanel } from "@/components/panels/NewsFeedPanel";
 import { PanelWrapper } from "@/components/panels/PanelWrapper";
 
+// Import to register panel actions (side-effect import)
+import "@/components/panels/panelActionRegistrations";
+
 interface PanelRegistryProps {
   panel: PanelInstance;
 }
