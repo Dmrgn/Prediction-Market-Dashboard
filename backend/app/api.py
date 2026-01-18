@@ -1,6 +1,7 @@
 import asyncio
 import time
 import json
+import random
 from typing import List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -29,17 +30,23 @@ async def search_markets(
     """
     print(q)
 
-    # === ON-DEMAND KALSHI SEARCH ===
-    # If user has a query and is searching Kalshi (or all sources), 
-    # trigger on-demand API search
-    if q and (not source or source == "kalshi"):
-        kalshi = getattr(request.app.state, "kalshi", None)
-        if kalshi:
-            # This searches Kalshi API and caches results
-            await kalshi.search_markets(q)
+    # === ON-DEMAND SEARCH ===
+    # If user has a query, trigger on-demand API search for both platforms
+    if q:
+        # Polymarket on-demand search
+        if not source or source == "polymarket":
+            poly = getattr(request.app.state, "poly", None)
+            if poly:
+                await poly.search_markets(q)
+        
+        # Kalshi on-demand search
+        if not source or source == "kalshi":
+            kalshi = getattr(request.app.state, "kalshi", None)
+            if kalshi:
+                await kalshi.search_markets(q)
     
     markets = state.get_all_markets()
-    
+
     # === FILTERS ===
     if source:
         markets = [m for m in markets if m.source == source]
@@ -74,8 +81,14 @@ async def search_markets(
         scored.sort(key=lambda x: x[1], reverse=True)
         markets = [m for m, _ in scored]
 
-    print(markets)
-    
+    # === LOG PLATFORM COUNTS ===
+    polymarket_count = sum(1 for m in markets if m.source == "polymarket")
+    kalshi_count = sum(1 for m in markets if m.source == "kalshi")
+    print(f"Query: '{q}' → Polymarket: {polymarket_count}, Kalshi: {kalshi_count}")
+
+    # === SHUFFLE RESULTS ===
+    random.shuffle(markets)
+
     total = len(markets)
     paginated = markets[offset:offset + limit]
     
@@ -177,19 +190,94 @@ import json
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     sub_manager = SubscriptionManager()
-    # Accept connection
-    # Note: SubscriptionManager logic in `subscribe` adds to set.
-    # We should perform handshake/accept here? sub_manager.subscribe doesn't accept(), it assumes open.
     await websocket.accept()
+    
+    # Agent state for this connection
+    current_thread_id = None
+    
+    # Get agent service from app state
+    agent_service = getattr(websocket.app.state, "agent", None)
     
     try:
         while True:
             # Client must send {"op": "subscribe", "market_id": "..."}
             # Or {"op": "unsubscribe", "market_id": "..."}
+            # Or {"op": "agent_init"} or {"op": "agent_message", "content": "..."}
             data = await websocket.receive_json()
             op = data.get("op")
             
-            if op == "subscribe":
+            # ===== AGENT OPERATIONS =====
+            
+            if op == "agent_init":
+                if not agent_service:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "Agent service not available"
+                    })
+                    continue
+                    
+                try:
+                    # Ensure assistant is initialized
+                    if not agent_service.assistant_id:
+                        await agent_service.initialize()
+                    
+                    # Create new thread for this connection
+                    thread = await agent_service.create_thread()
+                    current_thread_id = thread.thread_id
+                    
+                    await websocket.send_json({
+                        "type": "agent_ready",
+                        "thread_id": current_thread_id,
+                        "assistant_id": agent_service.assistant_id
+                    })
+                except Exception as e:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": f"Failed to initialize agent: {str(e)}"
+                    })
+
+            elif op == "agent_message":
+                if not agent_service:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "Agent service not available"
+                    })
+                    continue
+                    
+                try:
+                    prompt = data.get("content")
+                    thread_id = data.get("thread_id") or current_thread_id
+                    
+                    if not prompt:
+                        await websocket.send_json({
+                            "type": "error",
+                            "error": "No content provided"
+                        })
+                        continue
+                    
+                    if not thread_id:
+                        await websocket.send_json({
+                            "type": "error",
+                            "error": "No active thread_id. Send 'agent_init' first."
+                        })
+                        continue
+
+                    # Stream agent response
+                    async for chunk in agent_service.stream_chat(thread_id, prompt):
+                        await websocket.send_json({
+                            "type": "agent_response",
+                            "payload": chunk
+                        })
+                        
+                except Exception as e:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": f"Agent error: {str(e)}"
+                    })
+            
+            # ===== EXISTING MARKET OPERATIONS =====
+            
+            elif op == "subscribe":
                 pass
                 
             elif op == "subscribe_market":
