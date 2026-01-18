@@ -45,12 +45,12 @@ class PolymarketConnector:
 
     async def search_markets(self, query: str) -> list[Market]:
         """
-        On-demand search for markets:
-        1. Check cache (instant)
-        2. Search events API for matches (progressive)
+        On-demand search for markets using Polymarket's /public-search API.
+        This endpoint returns many more results than paginating through events.
         """
         q_lower = query.lower()
         results = []
+        seen_ids = set()
         
         # === STEP 1: Check cache ===
         cached = [
@@ -60,66 +60,49 @@ class PolymarketConnector:
                 (m.description and q_lower in m.description.lower())
             )
         ]
-        if cached:
-            results.extend(cached)
+        for m in cached:
+            if m.market_id not in seen_ids:
+                seen_ids.add(m.market_id)
+                results.append(m)
         
-        # === STEP 2: Search events API for new matches ===
-        if len(results) < 20:
-            try:
-                offset = 0
-                limit = 100
-                pages_scanned = 0
-                max_pages = 5  # Limit to avoid long searches
+        # === STEP 2: Use /public-search API (much better coverage) ===
+        try:
+            resp = await self.gamma_client.get("/public-search", params={"q": query})
+            if resp.status_code == 200:
+                data = resp.json()
                 
-                while pages_scanned < max_pages and len(results) < 20:
-                    params = {"closed": False, "limit": limit, "offset": offset}
+                for event in data.get("events", []):
+                    # Get tags/sector from event
+                    tags = event.get("tags", [])
+                    sector = get_sector_from_pm_tags(tags)
+                    tag_labels = extract_pm_tag_labels(tags)
                     
-                    resp = await self.gamma_client.get("/events", params=params)
-                    if resp.status_code != 200:
-                        break
-                    
-                    data = resp.json()
-                    if not data:
-                        break
-                    
-                    pages_scanned += 1
-                    
-                    # Check each event for matches
-                    for event in data:
-                        title = event.get("title", "").lower()
-                        description = event.get("description", "").lower()
-                        
-                        if q_lower in title or q_lower in description:
-                            # Process markets in this event
-                            tags = event.get("tags", [])
-                            sector = get_sector_from_pm_tags(tags)
-                            tag_labels = extract_pm_tag_labels(tags)
+                    # Process each market in the event
+                    for market_data in event.get("markets", []):
+                        # Skip closed markets
+                        if market_data.get("closed"):
+                            continue
                             
-                            for market_data in event.get("markets", []):
-                                m = self._normalize_event_market(market_data, event)
-                                if m and m.market_id not in [r.market_id for r in results]:
-                                    m.sector = sector
-                                    m.tags = tag_labels
-                                    self.state.update_market(m)
-                                    results.append(m)
-                                    
-                                    if len(results) >= 50:
-                                        break
-                        
-                        if len(results) >= 50:
-                            break
+                        m = self._normalize_event_market(market_data, event)
+                        if m and m.market_id not in seen_ids:
+                            m.sector = sector
+                            m.tags = tag_labels
+                            seen_ids.add(m.market_id)
+                            self.state.update_market(m)
+                            results.append(m)
+                            
+                            if len(results) >= 100:
+                                break
                     
-                    offset += len(data)
-                    
-                    if len(data) < limit:
+                    if len(results) >= 100:
                         break
+            else:
+                print(f"[Polymarket] Public search returned {resp.status_code}")
                     
-                    await asyncio.sleep(0.05)
-                    
-            except Exception as e:
-                print(f"[Polymarket] Search error: {e}")
+        except Exception as e:
+            print(f"[Polymarket] Public search error: {e}")
         
-        return results[:50]
+        return results[:100]
 
     async def search_events(self, query: str) -> tuple[list[Event], list[Market]]:
         """

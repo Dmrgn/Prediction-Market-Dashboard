@@ -422,48 +422,24 @@ export function CommandPalette() {
 
     let active = true;
     debounceRef.current = window.setTimeout(() => {
+      console.log('[CommandPalette] Searching markets for:', query);
       backendInterface
-        .searchEvents(query)
+        .searchMarkets(query)
         .then((result) => {
           if (!active) return;
 
-          // Flatten events into individual market options, grouped by event
-          const options: SubPaletteOption[] = [];
+          console.log('[CommandPalette] Search results:', result.total, 'markets');
 
-          // Add markets from events
-          for (const event of result.events) {
-            for (const market of event.markets) {
-              // Try to make a nice label
-              // e.g. "Fed Rate: No Change"
-              let label = market.title;
-              if (label.startsWith(event.title)) {
-                label = event.title + ": " + label.slice(event.title.length).replace(/^[ -]+/, "");
-              }
-
-              options.push({
-                value: market.market_id,
-                label: label,
-                description: `${event.source.toUpperCase()} • ${event.title}`,
-                meta: {
-                  source: event.source,
-                  price: market.outcomes?.[0]?.price
-                }
-              });
+          // Convert markets to options
+          const options: SubPaletteOption[] = result.markets.map((market) => ({
+            value: market.market_id,
+            label: market.title,
+            description: `${market.source.toUpperCase()} • ${market.category || 'Market'}`,
+            meta: {
+              source: market.source,
+              price: market.outcomes?.[0]?.price
             }
-          }
-
-          // Add standalone markets
-          for (const market of result.markets) {
-            options.push({
-              value: market.market_id,
-              label: market.title,
-              description: `${market.source.toUpperCase()} • standalone`,
-              meta: {
-                source: market.source,
-                price: market.outcomes?.[0]?.price
-              }
-            });
-          }
+          }));
 
           setSubPalette((prev) => ({
             ...prev,

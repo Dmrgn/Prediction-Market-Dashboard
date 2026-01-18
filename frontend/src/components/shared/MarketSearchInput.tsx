@@ -48,7 +48,7 @@ export function MarketSearchInput({ isOpen, onOpenChange, onSelect, placeholder 
         }
     }, [isOpen]);
 
-    // Debounced search
+    // Debounced search - call BOTH endpoints for comprehensive results
     useEffect(() => {
         if (!isOpen) return;
 
@@ -60,8 +60,33 @@ export function MarketSearchInput({ isOpen, onOpenChange, onSelect, placeholder 
         const timer = setTimeout(async () => {
             setLoading(true);
             try {
-                const data = await backendInterface.searchEvents(query);
-                setResults(data);
+                console.log('[MarketSearchInput] Searching for:', query);
+
+                // Call both endpoints in parallel for comprehensive results
+                const [eventsData, marketsData] = await Promise.all([
+                    backendInterface.searchEvents(query),
+                    backendInterface.searchMarkets(query)
+                ]);
+
+                console.log('[MarketSearchInput] Events:', eventsData.events.length, 'Markets:', marketsData.total);
+
+                // Merge results: events from searchEvents + standalone markets from searchMarkets
+                // Filter out markets that are already in events to avoid duplicates
+                const eventMarketIds = new Set(
+                    eventsData.events.flatMap(e => e.markets.map(m => m.market_id))
+                );
+
+                const standaloneMarkets = marketsData.markets.filter(
+                    m => !eventMarketIds.has(m.market_id)
+                );
+
+                const mergedResults: EventSearchResult = {
+                    events: eventsData.events,
+                    markets: [...eventsData.markets, ...standaloneMarkets],
+                    total: eventsData.events.length + eventsData.markets.length + standaloneMarkets.length
+                };
+
+                setResults(mergedResults);
                 // Reset expanded states on new search
                 setExpandedEventIds(new Set());
             } catch (e) {
@@ -198,7 +223,7 @@ export function MarketSearchInput({ isOpen, onOpenChange, onSelect, placeholder 
                                         const source = sourceMatch && sourceMatch[1]
                                             ? (sourceMatch[1].toLowerCase() as "polymarket" | "kalshi")
                                             : "polymarket"; // default fallback
-                                        
+
                                         const market: Market = {
                                             market_id: suggestion.value,
                                             title: suggestion.label,

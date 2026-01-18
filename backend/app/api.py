@@ -65,9 +65,11 @@ async def search_markets(
             t.lower() in tags_lower for t in m.tags
         )]
     
+    
     # === KEYWORD SEARCH with relevance scoring ===
     if q:
         q_lower = q.lower()
+        print(f"[DEBUG] Filtering {len(markets)} markets for query '{q_lower}'")
         scored = []
         for m in markets:
             score = 0
@@ -85,6 +87,7 @@ async def search_markets(
             if score > 0:
                 scored.append((m, score))
         
+        print(f"[DEBUG] After scoring: {len(scored)} markets matched")
         scored.sort(key=lambda x: x[1], reverse=True)
         markets = [m for m, _ in scored]
 

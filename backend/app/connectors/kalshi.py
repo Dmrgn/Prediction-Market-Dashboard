@@ -38,14 +38,13 @@ class KalshiConnector:
 
     async def search_markets(self, query: str) -> list[Market]:
         """
-        Multi-step smart search:
-        1. Check cache (instant)
-        2. Try exact ticker lookup (instant)
-        3. Scan events for matches (progressive)
+        Search Kalshi markets. Since Kalshi has no keyword search API,
+        we scan events with nested markets for better coverage.
         """
         q_lower = query.lower()
         q_upper = query.upper()
         results = []
+        seen_ids = set()
         
         # === STEP 1: Check cache ===
         cached = [
@@ -55,11 +54,12 @@ class KalshiConnector:
                 q_lower in (m.ticker or "").lower()
             )
         ]
-        if cached:
-            results.extend(cached)
+        for m in cached:
+            if m.market_id not in seen_ids:
+                seen_ids.add(m.market_id)
+                results.append(m)
         
         # === STEP 2: Try exact ticker lookup ===
-        # If query looks like a ticker (uppercase, has dash or KX prefix)
         if q_upper.startswith("KX") or "-" in query:
             try:
                 resp = await self.client.get(f"/markets/{q_upper}")
@@ -68,66 +68,67 @@ class KalshiConnector:
                     market_data = data.get("market")
                     if market_data:
                         m = self.normalize_market(market_data)
-                        if m and m.market_id not in [r.market_id for r in results]:
+                        if m and m.market_id not in seen_ids:
+                            seen_ids.add(m.market_id)
                             self.state.update_market(m)
                             results.append(m)
             except:
                 pass
         
-        # === STEP 3: Search events for matches ===
-        # Scan event pages looking for title matches
-        if len(results) < 10:
-            try:
-                cursor = None
-                pages_scanned = 0
-                max_pages = 5  # Limit to avoid long searches
+        # === STEP 3: Scan events with nested markets ===
+        try:
+            cursor = None
+            pages_scanned = 0
+            max_pages = 20  # Increased from 5 for better coverage
+            
+            while pages_scanned < max_pages and len(results) < 100:
+                params = {
+                    "limit": 200, 
+                    "with_nested_markets": True,
+                    "status": "open"
+                }
+                if cursor:
+                    params["cursor"] = cursor
                 
-                while pages_scanned < max_pages:
-                    params = {"limit": 100}
-                    if cursor:
-                        params["cursor"] = cursor
+                resp = await self.client.get("/events", params=params)
+                if resp.status_code != 200:
+                    break
+                
+                data = resp.json()
+                events = data.get("events", [])
+                cursor = data.get("cursor")
+                pages_scanned += 1
+                
+                # Find matching events by title
+                for event in events:
+                    title = event.get("title", "").lower()
+                    event_ticker = event.get("event_ticker", "").lower()
                     
-                    resp = await self.client.get("/events", params=params)
-                    if resp.status_code != 200:
+                    # Match on event title or ticker
+                    if q_lower in title or q_lower in event_ticker:
+                        # Process nested markets directly
+                        for market_data in event.get("markets", []):
+                            m = self.normalize_market(market_data)
+                            if m and m.market_id not in seen_ids:
+                                seen_ids.add(m.market_id)
+                                self.state.update_market(m)
+                                results.append(m)
+                                
+                                if len(results) >= 100:
+                                    break
+                    
+                    if len(results) >= 100:
                         break
-                    
-                    data = resp.json()
-                    events = data.get("events", [])
-                    cursor = data.get("cursor")
-                    pages_scanned += 1
-                    
-                    # Find matching events
-                    for event in events:
-                        title = event.get("title", "").lower()
-                        ticker = event.get("event_ticker", "").lower()
-                        
-                        if q_lower in title or q_lower in ticker:
-                            # Fetch markets for this event
-                            event_ticker = event.get("event_ticker")
-                            markets_resp = await self.client.get("/markets", params={
-                                "event_ticker": event_ticker,
-                                "limit": 50
-                            })
-                            if markets_resp.status_code == 200:
-                                for item in markets_resp.json().get("markets", []):
-                                    m = self.normalize_market(item)
-                                    if m and m.market_id not in [r.market_id for r in results]:
-                                        self.state.update_market(m)
-                                        results.append(m)
-                            
-                            # Found enough results
-                            if len(results) >= 50:
-                                break
-                    
-                    if not cursor or len(results) >= 50:
-                        break
-                    
-                    await asyncio.sleep(0.05)
-                    
-            except Exception as e:
-                print(f"[Kalshi] Search error: {e}")
+                
+                if not cursor or len(results) >= 100:
+                    break
+                
+                await asyncio.sleep(0.05)
+                
+        except Exception as e:
+            print(f"[Kalshi] Search error: {e}")
         
-        return results[:50]
+        return results[:100]
 
     async def search_events(self, query: str) -> tuple[list[Event], list[Market]]:
         """
