@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Line, LineChart, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from "recharts";
-import { Copy, Check, RefreshCw } from "lucide-react";
-import { backendInterface, type Market, type MarketPoint, type TimeRange, type OutcomeInfo } from "@/backendInterface";
-import type { PanelInstance } from "@/hooks/useWorkspaceStore";
+import { Copy, Check, RefreshCw, Search, X, Loader2, ChevronRight } from "lucide-react";
+import { backendInterface, type Market, type MarketPoint, type TimeRange, type OutcomeInfo, type Event, type EventSearchResult } from "@/backendInterface";
+import { useWorkspaceStore, type PanelInstance } from "@/hooks/useWorkspaceStore";
 import {
   ChartContainer,
   ChartTooltip,
@@ -10,6 +10,8 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { MarketSearchInput } from "@/components/shared/MarketSearchInput";
 
 interface ChartPanelProps {
   panel: PanelInstance;
@@ -49,7 +51,10 @@ type ChartDataPoint = {
 };
 
 export function ChartPanel({ panel }: ChartPanelProps) {
-  const marketId = String(panel.data.marketId ?? "");
+  const updatePanel = useWorkspaceStore(state => state.updatePanel);
+
+  // Current market ID from panel data
+  const currentMarketId = String(panel.data.marketId ?? "");
 
   // State
   const [market, setMarket] = useState<Market | null>(null);
@@ -59,20 +64,39 @@ export function ChartPanel({ panel }: ChartPanelProps) {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>("1D");
-  const [refreshInterval, setRefreshInterval] = useState(10000); // Default 10s
+  const [refreshInterval, setRefreshInterval] = useState(10000);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [enabledOutcomes, setEnabledOutcomes] = useState<Set<string>>(new Set());
+
+  // Search state
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
   const intervalRef = useRef<number | null>(null);
 
   // Copy handler
   const handleCopyMarketId = useCallback(() => {
-    navigator.clipboard.writeText(marketId).then(() => {
+    navigator.clipboard.writeText(currentMarketId).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }).catch(() => { });
-  }, [marketId]);
+  }, [currentMarketId]);
+
+  // Search handler (delegated to MarketSearchInput)
+  const handleSelectMarket = useCallback((selectedMarket: Market) => {
+    updatePanel(panel.id, {
+      marketId: selectedMarket.market_id,
+      title: selectedMarket.title,
+    });
+    // Close search
+    setShowSearch(false);
+    setSearchQuery("");
+
+    // Reset chart state
+    setEnabledOutcomes(new Set());
+  }, [panel.id, updatePanel]);
 
   // Fetch data function
   const fetchData = useCallback(async (showLoading = false) => {
@@ -81,7 +105,7 @@ export function ChartPanel({ panel }: ChartPanelProps) {
     setError(null);
 
     try {
-      const data = await backendInterface.fetchAllOutcomesHistory(marketId, timeRange);
+      const data = await backendInterface.fetchAllOutcomesHistory(currentMarketId, timeRange);
 
       setMarket(data.market);
       setOutcomes(data.outcomes);
@@ -99,22 +123,21 @@ export function ChartPanel({ panel }: ChartPanelProps) {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [marketId, timeRange, enabledOutcomes.size]);
+  }, [currentMarketId, timeRange, enabledOutcomes.size]);
 
-  // Initial fetch and re-fetch on timeRange change
+  // Initial fetch and re-fetch on timeRange or market change
   useEffect(() => {
+    setEnabledOutcomes(new Set()); // Reset outcomes when market changes
     fetchData(true);
-  }, [marketId, timeRange]);
+  }, [currentMarketId, timeRange]);
 
   // Set up periodic refresh
   useEffect(() => {
-    // Clear any existing interval
     if (intervalRef.current) {
       window.clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
 
-    // Set up new interval if refresh is enabled
     if (refreshInterval > 0) {
       intervalRef.current = window.setInterval(() => {
         fetchData(false);
@@ -216,41 +239,61 @@ export function ChartPanel({ panel }: ChartPanelProps) {
 
   const sourceLabel = market?.source ? market.source.toUpperCase() : null;
 
+
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-background overflow-hidden relative">
       {/* Header */}
-      <div className="p-3 border-b flex items-start justify-between shrink-0 z-10 bg-background/95 backdrop-blur-sm">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-lg leading-tight truncate">{market?.title ?? "Market"}</h3>
+      <div className="p-3 border-b shrink-0 z-20 bg-background/95 backdrop-blur-sm">
+        {/* Title Row */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0 relative">
+            <div className="flex flex-col">
+              <button
+                onClick={() => setShowSearch(true)}
+                className="text-left w-full group flex items-center gap-2"
+              >
+                <h3 className="font-semibold text-lg leading-tight truncate group-hover:text-primary transition-colors">
+                  {market?.title ?? "Market"}
+                </h3>
+                <Search className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+              </button>
+              {sourceLabel && (
+                <span className="inline-flex items-center rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground mt-1 w-fit">
+                  {sourceLabel}
+                </span>
+              )}
+              {/* Modal Search */}
+              <MarketSearchInput
+                isOpen={showSearch}
+                onOpenChange={setShowSearch}
+                onSelect={handleSelectMarket}
+              />
+            </div>
           </div>
-          {sourceLabel && (
-            <span className="inline-flex items-center rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground mt-1">
-              {sourceLabel}
-            </span>
-          )}
-        </div>
 
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className={`h-7 w-7 text-muted-foreground hover:text-foreground ${isRefreshing ? 'animate-spin' : ''}`}
-            onClick={handleManualRefresh}
-            disabled={isRefreshing}
-            title="Refresh Now"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              className={`h-7 w-7 text-muted-foreground hover:text-foreground ${isRefreshing ? 'animate-spin' : ''}`}
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              title="Refresh Now"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 text-muted-foreground"
-            onClick={handleCopyMarketId}
-          >
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground"
+              onClick={handleCopyMarketId}
+              title="Copy Market ID"
+            >
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
         </div>
       </div>
 

@@ -25,6 +25,7 @@ interface WorkspaceState {
     layout: Pick<PanelInstance, "x" | "y" | "w" | "h">
   ) => void;
   setPanelVisibility: (id: string, isVisible: boolean) => void;
+  setPanels: (panels: PanelInstance[]) => void;
 }
 
 const defaultLayout = {
@@ -100,6 +101,9 @@ const workspaceCreator: StateCreator<WorkspaceState> = (set, get) => ({
         panel.id === id ? { ...panel, isVisible } : panel
       ),
     }));
+  },
+  setPanels: (panels: PanelInstance[]) => {
+    set({ panels });
   },
 });
 

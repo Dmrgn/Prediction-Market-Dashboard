@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from "react";
-import { backendInterface, type OrderBook, type Market } from "@/backendInterface";
+import { backendInterface, type OrderBook, type Market, type Outcome } from "@/backendInterface";
 import type { PanelInstance } from "@/hooks/useWorkspaceStore";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { formatCurrency, formatCompactNumber } from "@/lib/utils";
+import { formatCompactNumber } from "@/lib/utils";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface OrderBookPanelProps {
     panel: PanelInstance;
@@ -15,9 +21,10 @@ export function OrderBookPanel({ panel }: OrderBookPanelProps) {
     const [market, setMarket] = useState<Market | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
+    const [selectedOutcome, setSelectedOutcome] = useState<Outcome | null>(null);
 
     // Track the outcome_id we're displaying to filter WebSocket messages
-    const primaryOutcomeId = useRef<string | null>(null);
+    const selectedOutcomeRef = useRef<string | null>(null);
 
     const handleCopyMarketId = useCallback(() => {
         navigator.clipboard.writeText(marketId).then(() => {
@@ -26,48 +33,55 @@ export function OrderBookPanel({ panel }: OrderBookPanelProps) {
         }).catch(() => { });
     }, [marketId]);
 
+    // Fetch market data
     useEffect(() => {
-        let unsubscribe: (() => void) | undefined;
         let isMounted = true;
         setError(null);
-        primaryOutcomeId.current = null; // Reset on marketId change
 
-        const init = async () => {
+        const fetchMarket = async () => {
             try {
                 const m = await backendInterface.fetchMarket(marketId);
-                if (isMounted) setMarket(m);
-
-                const outcomeId = m.outcomes?.[0]?.outcome_id;
-
-                if (!outcomeId) {
-                    if (isMounted) setError("No outcomes found");
-                    return;
-                }
-
-                // Store the primary outcome_id we'll filter by
-                primaryOutcomeId.current = outcomeId;
-
-                if (!isMounted) return;
-
-                // Initial fetch
-                try {
-                    const ob = await backendInterface.fetchOrderbook(marketId, outcomeId);
-                    if (isMounted) setOrderbook(ob);
-                } catch (e) {
-                    // console.error(e);
-                }
-
-                // Subscribe - but FILTER by outcome_id in the handler
-                unsubscribe = backendInterface.socket.subscribeToOrderBook(marketId, (data) => {
-                    // Only update if the outcome_id matches the primary one we're displaying
-                    if (isMounted && primaryOutcomeId.current && data.outcome_id === primaryOutcomeId.current) {
-                        setOrderbook(data);
+                if (isMounted) {
+                    setMarket(m);
+                    // Auto-select first outcome
+                    if (m.outcomes?.length > 0) {
+                        setSelectedOutcome(m.outcomes[0]);
                     }
-                });
-
+                }
             } catch (err: any) {
                 if (isMounted) setError(err.message || "Failed to load market");
             }
+        };
+
+        fetchMarket();
+
+        return () => { isMounted = false; };
+    }, [marketId]);
+
+    // Fetch orderbook and subscribe when outcome changes
+    useEffect(() => {
+        if (!selectedOutcome) return;
+
+        let unsubscribe: (() => void) | undefined;
+        let isMounted = true;
+
+        selectedOutcomeRef.current = selectedOutcome.outcome_id;
+
+        const init = async () => {
+            // Initial fetch
+            try {
+                const ob = await backendInterface.fetchOrderbook(marketId, selectedOutcome.outcome_id);
+                if (isMounted) setOrderbook(ob);
+            } catch (e) {
+                // Orderbook might not exist
+            }
+
+            // Subscribe to updates
+            unsubscribe = backendInterface.socket.subscribeToOrderBook(marketId, (data) => {
+                if (isMounted && data.outcome_id === selectedOutcomeRef.current) {
+                    setOrderbook(data);
+                }
+            });
         };
 
         init();
@@ -76,7 +90,7 @@ export function OrderBookPanel({ panel }: OrderBookPanelProps) {
             isMounted = false;
             unsubscribe?.();
         };
-    }, [marketId]);
+    }, [marketId, selectedOutcome]);
 
     const processedData = useMemo(() => {
         if (!orderbook) return null;
@@ -108,35 +122,77 @@ export function OrderBookPanel({ panel }: OrderBookPanelProps) {
     }, [orderbook]);
 
     const sourceLabel = market?.source ? market.source.toUpperCase() : null;
-    const outcomeName = market?.outcomes?.[0]?.name;
+    const hasMultipleOutcomes = (market?.outcomes?.length ?? 0) > 1;
 
     return (
         <div className="flex flex-col h-full bg-background min-h-0 overflow-hidden font-sans text-xs select-none">
             {/* Header */}
-            <div className="p-3 border-b shrink-0 flex items-start justify-between bg-muted/5">
-                <div>
-                    <h3 className="font-semibold text-sm">Order Book</h3>
-                    <div className="flex items-center gap-2 mt-1">
-                        {sourceLabel && (
-                            <span className="inline-flex items-center rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground border">
-                                {sourceLabel}
-                            </span>
-                        )}
-                        {outcomeName && (
-                            <span className="text-muted-foreground truncate max-w-[140px]" title={outcomeName}>
-                                {outcomeName}
-                            </span>
-                        )}
+            <div className="p-3 border-b shrink-0 bg-muted/5">
+                {/* Market Title */}
+                <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-sm leading-tight truncate" title={market?.title}>
+                            {market?.title ?? "Order Book"}
+                        </h3>
+                        <div className="flex items-center gap-2 mt-1">
+                            {sourceLabel && (
+                                <span className="inline-flex items-center rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground border shrink-0">
+                                    {sourceLabel}
+                                </span>
+                            )}
+                        </div>
                     </div>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-muted-foreground hover:text-foreground shrink-0"
+                        onClick={handleCopyMarketId}
+                    >
+                        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                    </Button>
                 </div>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                    onClick={handleCopyMarketId}
-                >
-                    {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                </Button>
+
+                {/* Outcome Selector */}
+                {market?.outcomes && market.outcomes.length > 0 && (
+                    <div className="mt-2">
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="w-full justify-between h-8 text-xs"
+                                >
+                                    <div className="flex items-center gap-2 truncate">
+                                        <span className="w-2 h-2 rounded-full bg-primary shrink-0" />
+                                        <span className="truncate">
+                                            {selectedOutcome?.name ?? "Select Outcome"}
+                                        </span>
+                                        {selectedOutcome && (
+                                            <span className="text-muted-foreground shrink-0">
+                                                {(selectedOutcome.price * 100).toFixed(1)}%
+                                            </span>
+                                        )}
+                                    </div>
+                                    <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)]" align="start">
+                                {market.outcomes.map((outcome) => (
+                                    <DropdownMenuItem
+                                        key={outcome.outcome_id}
+                                        onClick={() => setSelectedOutcome(outcome)}
+                                        className="flex items-center justify-between"
+                                    >
+                                        <span className="truncate">{outcome.name}</span>
+                                        <span className="text-muted-foreground text-xs shrink-0 ml-2">
+                                            {(outcome.price * 100).toFixed(1)}%
+                                        </span>
+                                    </DropdownMenuItem>
+                                ))}
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    </div>
+                )}
             </div>
 
             {error && <div className="p-2 text-destructive">{error}</div>}
@@ -147,6 +203,13 @@ export function OrderBookPanel({ panel }: OrderBookPanelProps) {
                         <div className="flex flex-col items-center gap-2">
                             <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                             <span>Loading...</span>
+                        </div>
+                    </div>
+                ) : processedData.asks.length === 0 && processedData.bids.length === 0 ? (
+                    <div className="flex items-center justify-center p-8 text-muted-foreground h-full">
+                        <div className="flex flex-col items-center gap-2 text-center">
+                            <span>No orderbook data</span>
+                            <span className="text-[10px]">This market may not have active orders</span>
                         </div>
                     </div>
                 ) : (

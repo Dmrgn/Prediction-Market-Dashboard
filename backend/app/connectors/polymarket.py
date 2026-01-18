@@ -1,7 +1,8 @@
 import httpx
 import asyncio
 import json
-from ..schemas import Market, Outcome, OrderBookLevel
+import re
+from ..schemas import Market, Outcome, OrderBookLevel, Event
 from ..state import StateManager
 from ..taxonomy import get_sector_from_pm_tags, extract_pm_tag_labels
 
@@ -10,6 +11,30 @@ from ..taxonomy import get_sector_from_pm_tags, extract_pm_tag_labels
 # - CLOB API: Trading (orderbooks, order placement)
 GAMMA_API_URL = "https://gamma-api.polymarket.com"
 CLOB_API_URL = "https://clob.polymarket.com"
+
+# Common stop words to filter out for smarter search
+STOP_WORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "will", "would", "could", 
+    "should", "be", "been", "being", "have", "has", "had", "do", "does", 
+    "did", "can", "may", "might", "must", "shall", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "as", "into", "through", "during",
+    "before", "after", "above", "below", "between", "under", "again", "then",
+    "once", "here", "there", "when", "where", "why", "how", "all", "each",
+    "every", "both", "few", "more", "most", "other", "some", "such", "no",
+    "nor", "not", "only", "own", "same", "so", "than", "too", "very", "just",
+    "and", "but", "if", "or", "because", "until", "while", "this", "that",
+    "these", "those", "what", "which", "who", "whom", "it", "its", "i", "we",
+    "you", "he", "she", "they", "them", "his", "her", "our", "your", "their"
+}
+
+def extract_keywords(query: str) -> list[str]:
+    """Extract meaningful keywords from natural language query."""
+    # Lowercase and extract words
+    words = re.findall(r'\b[a-zA-Z]+\b', query.lower())
+    # Filter stop words and short words
+    keywords = [w for w in words if w not in STOP_WORDS and len(w) > 1]
+    return keywords
+
 
 
 class PolymarketConnector:
@@ -96,6 +121,122 @@ class PolymarketConnector:
         
         return results[:50]
 
+    async def search_events(self, query: str) -> tuple[list[Event], list[Market]]:
+        """
+        Search for events (groups of related markets) on Polymarket.
+        Uses smart keyword extraction for natural language queries.
+        
+        Returns Event objects containing their child markets.
+        """
+        keywords = extract_keywords(query)
+        if not keywords:
+            keywords = [query.strip().lower()]
+        
+        events = []
+        standalone_markets = []
+        
+        try:
+            # Fetch events from API (no title filtering available in API)
+            # We'll filter client-side
+            resp = await self.gamma_client.get("/events", params={
+                "closed": False,
+                "limit": 100,  # Fetch more to have enough results after filtering
+                "order": "volume24hr",
+                "ascending": False
+            })
+            
+            if resp.status_code != 200:
+                return [], []
+            
+            data = resp.json()
+            
+            # Filter events by keywords
+            for event_data in data:
+                title = event_data.get("title", "").lower()
+                description = event_data.get("description", "").lower()
+                
+                # Check if any keyword matches the title or description
+                if not any(kw in title or kw in description for kw in keywords):
+                    continue
+                event_markets = event_data.get("markets", [])
+                
+                # Get tags/sector
+                tags = event_data.get("tags", [])
+                sector = get_sector_from_pm_tags(tags)
+                tag_labels = extract_pm_tag_labels(tags)
+                
+                # Normalize all markets in this event
+                markets = []
+                for market_data in event_markets:
+                    market = self._normalize_event_market(market_data, event_data)
+                    if market:
+                        market.sector = sector
+                        market.tags = tag_labels
+                        self.state.update_market(market)
+                        markets.append(market)
+                
+                if not markets:
+                    continue
+                
+                # If event has multiple markets, it's a true event
+                # If single market, treat as standalone
+                if len(markets) > 1:
+                    events.append(Event(
+                        event_id=str(event_data.get("id", "")),
+                        title=event_data.get("title", "Unknown Event"),
+                        description=event_data.get("description"),
+                        source="polymarket",
+                        slug=event_data.get("slug"),
+                        markets=markets
+                    ))
+                else:
+                    standalone_markets.extend(markets)
+        
+        except Exception as e:
+            print(f"[Polymarket] Event search error: {e}")
+        
+        return events, standalone_markets
+
+    async def fetch_by_slug(self, slug: str) -> list[Market]:
+        """
+        Fetch markets from a Polymarket event by its URL slug.
+        
+        E.g., https://polymarket.com/event/us-strikes-iran-by
+        → fetch_by_slug("us-strikes-iran-by")
+        
+        Returns list of Market objects for all markets in that event.
+        """
+        try:
+            resp = await self.gamma_client.get("/events", params={"slug": slug})
+            if resp.status_code != 200:
+                print(f"[Polymarket] Slug lookup failed: {resp.status_code}")
+                return []
+            
+            data = resp.json()
+            if not data:
+                return []
+            
+            event = data[0]
+            tags = event.get("tags", [])
+            sector = get_sector_from_pm_tags(tags)
+            tag_labels = extract_pm_tag_labels(tags)
+            
+            results = []
+            for market_data in event.get("markets", []):
+                market = self._normalize_event_market(market_data, event)
+                if market:
+                    market.sector = sector
+                    market.tags = tag_labels
+                    # Cache it
+                    self.state.update_market(market)
+                    results.append(market)
+            
+            return results
+            
+        except Exception as e:
+            print(f"[Polymarket] Slug lookup error: {e}")
+            return []
+
     def _normalize_event_market(self, market_data: dict, event: dict = None) -> Market:
         """Convert Gamma API event market data to canonical Market schema"""
         try:
@@ -150,7 +291,9 @@ class PolymarketConnector:
                 source_id=market_data.get("slug", condition_id),
                 outcomes=outcomes,
                 status="active" if market_data.get("active") and not market_data.get("closed") else "closed",
-                image_url=market_data.get("image") or (event.get("image") if event else None)
+                image_url=market_data.get("image") or (event.get("image") if event else None),
+                volume_24h=float(market_data.get("volume24hr") or market_data.get("volume") or 0),
+                liquidity=float(market_data.get("liquidity") or 0)
             )
         except Exception as e:
             print(f"[Polymarket] Error normalizing market: {e}")
@@ -197,7 +340,9 @@ class PolymarketConnector:
                 source_id=data.get("slug", condition_id),
                 outcomes=outcomes,
                 status="active" if data.get("active") and not data.get("closed") else "closed",
-                image_url=data.get("image")
+                image_url=data.get("image"),
+                volume_24h=float(data.get("volume24hr") or data.get("volume") or 0),
+                liquidity=float(data.get("liquidity") or 0)
             )
         except Exception as e:
             print(f"[Polymarket] Error normalizing market: {e}")

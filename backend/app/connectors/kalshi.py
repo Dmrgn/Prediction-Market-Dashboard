@@ -1,10 +1,23 @@
 import httpx
 import asyncio
-from ..schemas import Market, Outcome, OrderBookLevel
+import re
+from ..schemas import Market, Outcome, OrderBookLevel, Event
 from ..state import StateManager
 from ..taxonomy import get_sector_from_kalshi_category
 
 KALSHI_API_URL = "https://api.elections.kalshi.com/trade-api/v2"
+
+# Stop words for keyword extraction
+STOP_WORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "will", "would", "could", 
+    "be", "been", "to", "of", "in", "for", "on", "with", "at", "by", "from",
+    "and", "but", "if", "or", "this", "that", "it", "what", "which", "who"
+}
+
+def extract_keywords(query: str) -> list[str]:
+    """Extract meaningful keywords from natural language query."""
+    words = re.findall(r'\b[a-zA-Z]+\b', query.lower())
+    return [w for w in words if w not in STOP_WORDS and len(w) > 1]
 
 SERIES_TO_SECTOR = {
     "KXNFL": "Sports", "KXNBA": "Sports", "KXMLB": "Sports", 
@@ -116,6 +129,95 @@ class KalshiConnector:
         
         return results[:50]
 
+    async def search_events(self, query: str) -> tuple[list[Event], list[Market]]:
+        """
+        Search for events on Kalshi, grouping markets by event.
+        Returns (events, standalone_markets).
+        """
+        keywords = extract_keywords(query)
+        if not keywords:
+            keywords = [query.strip()]
+        
+        search_term = " ".join(keywords[:3])
+        q_lower = search_term.lower()
+        
+        events = []
+        standalone_markets = []
+        seen_event_ids = set()
+        
+        try:
+            cursor = None
+            pages_scanned = 0
+            
+            while pages_scanned < 3:
+                params = {"limit": 100}
+                if cursor:
+                    params["cursor"] = cursor
+                
+                resp = await self.client.get("/events", params=params)
+                if resp.status_code != 200:
+                    break
+                
+                data = resp.json()
+                event_list = data.get("events", [])
+                cursor = data.get("cursor")
+                pages_scanned += 1
+                
+                for event_data in event_list:
+                    title = event_data.get("title", "").lower()
+                    event_ticker = event_data.get("event_ticker", "")
+                    
+                    # Check if matches query
+                    if not any(kw in title for kw in keywords):
+                        continue
+                    
+                    if event_ticker in seen_event_ids:
+                        continue
+                    seen_event_ids.add(event_ticker)
+                    
+                    # Fetch markets for this event
+                    markets_resp = await self.client.get("/markets", params={
+                        "event_ticker": event_ticker,
+                        "limit": 50
+                    })
+                    
+                    if markets_resp.status_code != 200:
+                        continue
+                    
+                    markets = []
+                    for item in markets_resp.json().get("markets", []):
+                        m = self.normalize_market(item)
+                        if m:
+                            self.state.update_market(m)
+                            markets.append(m)
+                    
+                    if not markets:
+                        continue
+                    
+                    # Multi-market = event, single = standalone
+                    if len(markets) > 1:
+                        events.append(Event(
+                            event_id=event_ticker,
+                            title=event_data.get("title", "Unknown Event"),
+                            source="kalshi",
+                            markets=markets
+                        ))
+                    else:
+                        standalone_markets.extend(markets)
+                    
+                    if len(events) >= 10:
+                        break
+                
+                if not cursor or len(events) >= 10:
+                    break
+                
+                await asyncio.sleep(0.05)
+                
+        except Exception as e:
+            print(f"[Kalshi] Event search error: {e}")
+        
+        return events, standalone_markets
+
     def _get_sector_from_ticker(self, ticker: str) -> str:
         ticker_upper = ticker.upper()
         for prefix, sector in SERIES_TO_SECTOR.items():
@@ -184,7 +286,9 @@ class KalshiConnector:
                 source_id=market_ticker,
                 outcomes=outcomes,
                 status="active",
-                image_url=None
+                image_url=None,
+                volume_24h=float(data.get("volume") or 0),
+                liquidity=float(data.get("liquidity") or data.get("open_interest") or 0)
             )
         except:
             return None

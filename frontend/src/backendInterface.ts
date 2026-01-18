@@ -26,10 +26,12 @@ type Market = {
   outcomes: Outcome[];
   status: string;
   image_url?: string | null;
+  volume_24h: number;
+  liquidity: number;
 };
 
 type MarketSearchResponse = {
-  markets: Market[];
+  markets: Market[],
   facets: {
     sectors: Record<string, number>;
     sources: { polymarket: 0; kalshi: 0 };
@@ -103,6 +105,21 @@ type MultiOutcomeHistoryResponse = {
   market_id: string;
   outcomes: Record<string, OutcomeInfo>;
   history: Record<string, QuotePoint[]>;
+};
+
+type Event = {
+  event_id: string;
+  title: string;
+  description?: string | null;
+  source: "polymarket" | "kalshi";
+  slug?: string | null;
+  markets: Market[];
+};
+
+type EventSearchResult = {
+  events: Event[];
+  markets: Market[];
+  total: number;
 };
 
 type NewsSearchParams = {
@@ -332,10 +349,17 @@ export const backendInterface = {
   fetchMarkets: async (query?: string, source?: "polymarket" | "kalshi"): Promise<MarketSearchResponse> =>
     fetchJson<MarketSearchResponse>(buildUrl("/markets/search", { q: query, source })),
 
+  searchMarkets: async (query?: string, source?: "polymarket" | "kalshi"): Promise<MarketSearchResponse> =>
+    fetchJson<MarketSearchResponse>(buildUrl("/markets/search", { q: query, source })),
+
+  searchEvents: async (query: string, source?: "polymarket" | "kalshi"): Promise<EventSearchResult> =>
+    fetchJson<EventSearchResult>(buildUrl("/events/search", { q: query, source })),
+
   fetchMarket: async (id: string): Promise<Market> => {
     if (!id) throw new Error("Market ID is required");
     return fetchJson<Market>(buildUrl(`/markets/${id}`));
   },
+
 
   fetchRelatedMarket: async (id: string): Promise<Market> => {
     if (!id) throw new Error("Market ID is required");
@@ -498,6 +522,8 @@ export const backendInterface = {
 };
 
 export type {
+  Event,
+  EventSearchResult,
   Market,
   MarketDataResponse,
   MarketPoint,
