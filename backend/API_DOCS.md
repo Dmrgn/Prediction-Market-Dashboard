@@ -11,7 +11,14 @@ http://localhost:8000
 
 ### `GET /markets/search`
 
-Search and filter markets across Polymarket and Kalshi.
+Search and filter markets across Polymarket and Kalshi with **on-demand loading**.
+
+**🔄 On-Demand Behavior:**
+- Markets are NOT pre-loaded at startup
+- First search for a term queries APIs directly (may take 1-3 seconds)
+- Results are progressively cached
+- Subsequent searches for the same terms are instant
+- Cache grows naturally based on usage
 
 **Query Parameters:**
 
@@ -303,6 +310,8 @@ interface Outcome {
 
 ## Notes
 
-- **On-Demand Caching:** Kalshi searches progressively cache results. First search may take 2-3s, subsequent searches are instant.
-- **Facets:** Use `facets` from search response to build filter UI (sector chips, source toggle, tag cloud).
-- **Outcome Prices:** Range 0.0-1.0, representing probability. Multiply by 100 for percentage.
+- **On-Demand Loading:** Both Polymarket and Kalshi use on-demand loading. First search for a term may take 1-3 seconds as it queries the API, but results are cached. Subsequent searches are instant.
+- **Cache Behavior:** Markets are only cached when searched or subscribed to via WebSocket. The cache grows naturally based on actual usage.
+- **Facets:** Facets reflect only cached markets. In a fresh instance, facets will be empty until users search. Your frontend should handle this appropriately.
+- **Outcome Prices:** Range 0.0-1.0, representing probability. Multiply by 100 for percentage display.
+- **Startup Time:** Server starts instantly with no pre-loading delay.

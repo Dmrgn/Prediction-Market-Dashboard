@@ -29,7 +29,8 @@ export type CommandPayloads =
   | { type: "OPTIMIZE_LAYOUT"; data: Record<string, never> }
   | { type: "SAVE_LAYOUT"; data: { name: string } }
   | { type: "LOAD_LAYOUT"; data: { profileId: string } }
-  | { type: "DELETE_LAYOUT"; data: { profileId: string } };
+  | { type: "DELETE_LAYOUT"; data: { profileId: string } }
+  | { type: "FRESH_LAYOUT"; data: Record<string, never> };
 
 export type CommandParamType = "text" | "select" | "market";
 
@@ -72,7 +73,8 @@ export const executeCommand = (type: CommandType, data: CommandPayloads["data"])
     }
     case COMMANDS.QUERY_MARKET: {
       const payload = data as CommandPayloads["data"] & { marketId: string };
-      store.openPanel("MARKET_AGGREGATOR_GRAPH", { marketId: payload.marketId });
+      store.openPanel("CHART", { marketId: payload.marketId });
+      store.openPanel("ORDER_BOOK", { marketId: payload.marketId });
       store.openPanel("NEWS_FEED", { query: payload.marketId });
       break;
     }
@@ -121,10 +123,10 @@ export const getCommandEntries = (
 
   const baseCommands: CommandEntry[] = [
     {
-      id: "open-market-aggregator",
+      id: "open-chart",
       type: COMMANDS.OPEN_PANEL,
-      label: "Open Market Aggregator",
-      description: "Add a market graph panel",
+      label: "Open Chart",
+      description: "Add a price chart panel",
       closeOnRun: true,
       params: [
         {
@@ -137,7 +139,28 @@ export const getCommandEntries = (
       ],
       handler: (values) =>
         executeCommand(COMMANDS.OPEN_PANEL, {
-          panelType: "MARKET_AGGREGATOR_GRAPH",
+          panelType: "CHART",
+          panelData: { marketId: values.marketId || "demo-market" },
+        }),
+    },
+    {
+      id: "open-order-book",
+      type: COMMANDS.OPEN_PANEL,
+      label: "Open Order Book",
+      description: "Add an order book panel",
+      closeOnRun: true,
+      params: [
+        {
+          name: "marketId",
+          label: "Market",
+          type: "market",
+          placeholder: "Search markets",
+          defaultValue: "",
+        },
+      ],
+      handler: (values) =>
+        executeCommand(COMMANDS.OPEN_PANEL, {
+          panelType: "ORDER_BOOK",
           panelData: { marketId: values.marketId || "demo-market" },
         }),
     },
@@ -166,7 +189,7 @@ export const getCommandEntries = (
       id: "query-market",
       type: COMMANDS.QUERY_MARKET,
       label: "Query Market",
-      description: "Open both market graph + news",
+      description: "Open Chart, Order Book + News",
       closeOnRun: true,
       params: [
         {

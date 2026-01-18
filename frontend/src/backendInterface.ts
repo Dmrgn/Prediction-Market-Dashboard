@@ -92,6 +92,19 @@ type MarketDataResponse = {
   points: MarketPoint[];
 };
 
+type TimeRange = "1H" | "6H" | "1D" | "5D" | "1W" | "1M" | "ALL";
+
+type OutcomeInfo = {
+  name: string;
+  price: number;
+};
+
+type MultiOutcomeHistoryResponse = {
+  market_id: string;
+  outcomes: Record<string, OutcomeInfo>;
+  history: Record<string, QuotePoint[]>;
+};
+
 type NewsSearchParams = {
   query: string;
   providers?: string[];
@@ -116,12 +129,23 @@ const toMarketPoint = (point: QuotePoint): MarketPoint => ({
 
 class MarketSocketManager {
   private subscriptions = new Map<string, Set<(data: MarketPoint) => void>>();
+  private orderBooksubscriptions = new Map<string, Set<(data: OrderBook) => void>>();
   private socket: WebSocket | null = null;
   private reconnectTimer: number | null = null;
   private connecting = false;
+  private pendingSubscriptions = new Set<string>();
 
   private get hasSubscribers() {
-    return Array.from(this.subscriptions.values()).some((handlers) => handlers.size > 0);
+    return (
+      Array.from(this.subscriptions.values()).some((handlers) => handlers.size > 0) ||
+      Array.from(this.orderBooksubscriptions.values()).some((handlers) => handlers.size > 0)
+    );
+  }
+
+  private sendMessage(message: object) {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(message));
+    }
   }
 
   private ensureSocket() {
@@ -131,23 +155,50 @@ class MarketSocketManager {
 
     this.socket.addEventListener("open", () => {
       this.connecting = false;
-      this.socket?.send(JSON.stringify({ op: "subscribe" }));
+
+      // Send all pending subscriptions
+      const allMarkets = new Set([
+        ...this.subscriptions.keys(),
+        ...this.orderBooksubscriptions.keys(),
+        ...this.pendingSubscriptions
+      ]);
+
+      allMarkets.forEach((marketId) => {
+        this.sendMessage({ op: "subscribe_market", market_id: marketId });
+      });
+
+      this.pendingSubscriptions.clear();
     });
 
     this.socket.addEventListener("message", (event) => {
       try {
         const payload = JSON.parse(event.data) as QuoteMessage | OrderBookMessage;
-        if (payload.type !== "quote") return;
-        const handlers = this.subscriptions.get(payload.market_id);
-        if (!handlers || handlers.size === 0) return;
-        const point: MarketPoint = {
-          timestamp: new Date(payload.ts * 1000).toISOString(),
-          price: payload.mid,
-          bid: payload.bid,
-          ask: payload.ask,
-          volume: 0,
-        };
-        handlers.forEach((handler) => handler(point));
+
+        if (payload.type === "quote") {
+          const handlers = this.subscriptions.get(payload.market_id);
+          if (handlers && handlers.size > 0) {
+            const point: MarketPoint = {
+              timestamp: new Date(payload.ts * 1000).toISOString(),
+              price: payload.mid,
+              bid: payload.bid,
+              ask: payload.ask,
+              volume: 0,
+            };
+            handlers.forEach((handler) => handler(point));
+          }
+        } else if (payload.type === "orderbook") {
+          const handlers = this.orderBooksubscriptions.get(payload.market_id);
+          if (handlers && handlers.size > 0) {
+            const orderbook: OrderBook = {
+              market_id: payload.market_id,
+              outcome_id: payload.outcome_id,
+              ts: payload.ts,
+              bids: payload.bids,
+              asks: payload.asks
+            };
+            handlers.forEach((handler) => handler(orderbook));
+          }
+        }
       } catch (error) {
         console.error("WebSocket message error", error);
       }
@@ -189,20 +240,60 @@ class MarketSocketManager {
 
     this.ensureSocket();
 
+    // If socket is open, send immediately. Otherwise, queue for when it opens.
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.sendMessage({ op: "subscribe_market", market_id: marketId });
+    } else {
+      this.pendingSubscriptions.add(marketId);
+    }
+
     return () => {
       const current = this.subscriptions.get(marketId);
       if (!current) return;
       current.delete(handler);
       if (current.size === 0) {
         this.subscriptions.delete(marketId);
+        // Only unsubscribe if no orderbook subscribers either
+        if (!this.orderBooksubscriptions.has(marketId)) {
+          this.sendMessage({ op: "unsubscribe_market", market_id: marketId });
+        }
+      }
+      this.closeSocketIfIdle();
+    };
+  }
+
+  subscribeToOrderBook(marketId: string, handler: (data: OrderBook) => void) {
+    if (!marketId) return () => undefined;
+    const handlers = this.orderBooksubscriptions.get(marketId) ?? new Set();
+    handlers.add(handler);
+    this.orderBooksubscriptions.set(marketId, handlers);
+
+    this.ensureSocket();
+
+    // If socket is open, send immediately. Otherwise, queue for when it opens.
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.sendMessage({ op: "subscribe_market", market_id: marketId });
+    } else {
+      this.pendingSubscriptions.add(marketId);
+    }
+
+    return () => {
+      const current = this.orderBooksubscriptions.get(marketId);
+      if (!current) return;
+      current.delete(handler);
+      if (current.size === 0) {
+        this.orderBooksubscriptions.delete(marketId);
+        // Only unsubscribe if no market (quote) subscribers either
+        if (!this.subscriptions.has(marketId)) {
+          this.sendMessage({ op: "unsubscribe_market", market_id: marketId });
+        }
       }
       this.closeSocketIfIdle();
     };
   }
 
   unsubscribeFromMarket(marketId: string) {
-    this.subscriptions.delete(marketId);
-    this.closeSocketIfIdle();
+    // Deprecated, relying on return callbacks
   }
 }
 
@@ -262,6 +353,44 @@ export const backendInterface = {
       outcomeId: resolvedOutcomeId,
       points: history.map(toMarketPoint),
     };
+  },
+
+  fetchMarketDataWithRange: async (id: string, range: TimeRange, outcomeId?: string): Promise<MarketDataResponse> => {
+    if (!id) throw new Error("Market ID is required");
+    const market = await backendInterface.fetchMarket(id);
+    const resolvedOutcomeId = outcomeId ?? market.outcomes?.[0]?.outcome_id ?? null;
+    if (!resolvedOutcomeId) {
+      return { marketId: market.market_id, outcomeId: null, points: [] };
+    }
+    const history = await fetchJson<QuotePoint[]>(
+      buildUrl(`/markets/${market.market_id}/history`, { outcome_id: resolvedOutcomeId, range }),
+    );
+    return {
+      marketId: market.market_id,
+      outcomeId: resolvedOutcomeId,
+      points: history.map(toMarketPoint),
+    };
+  },
+
+  fetchAllOutcomesHistory: async (id: string, range?: TimeRange): Promise<{
+    market: Market;
+    outcomes: Record<string, OutcomeInfo>;
+    history: Record<string, MarketPoint[]>;
+  }> => {
+    if (!id) throw new Error("Market ID is required");
+    const market = await backendInterface.fetchMarket(id);
+
+    const data = await fetchJson<MultiOutcomeHistoryResponse>(
+      buildUrl(`/markets/${id}/history/all`, { range }),
+    );
+
+    // Convert QuotePoints to MarketPoints for each outcome
+    const history: Record<string, MarketPoint[]> = {};
+    for (const [outcomeId, points] of Object.entries(data.history)) {
+      history[outcomeId] = points.map(toMarketPoint);
+    }
+
+    return { market, outcomes: data.outcomes, history };
   },
 
   fetchNews: async (params: NewsSearchParams): Promise<Article[]> => {
@@ -352,6 +481,8 @@ export const backendInterface = {
   socket: {
     subscribeToMarket: (id: string, handler: (data: MarketPoint) => void) =>
       marketSocketManager.subscribeToMarket(id, handler),
+    subscribeToOrderBook: (id: string, handler: (data: OrderBook) => void) =>
+      marketSocketManager.subscribeToOrderBook(id, handler),
     unsubscribeFromMarket: (id: string) => marketSocketManager.unsubscribeFromMarket(id),
   },
 };
@@ -365,5 +496,7 @@ export type {
   OrderBook,
   OrderBookLevel,
   Outcome,
+  OutcomeInfo,
   QuotePoint,
+  TimeRange,
 };

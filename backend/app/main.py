@@ -1,10 +1,12 @@
 import asyncio
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .api import router, manager
 from .state import StateManager
 from .connectors.polymarket import PolymarketConnector
 from .connectors.kalshi import KalshiConnector
+from .ai.agent import AgentService
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -35,12 +37,29 @@ async def lifespan(app: FastAPI):
     app.state.poly = poly_connector
     app.state.kalshi = kalshi_connector
     
+    # Initialize Agent Service
+    print("Initializing Agent Service...")
+    try:
+        agent_service = AgentService()
+        # Load assistant ID from environment or create new one
+        assistant_id = os.getenv("BACKBOARD_ASSISTANT_ID")
+        await agent_service.initialize(assistant_id)
+        app.state.agent = agent_service
+        print(f"Agent Service initialized with assistant: {agent_service.assistant_id}")
+    except ValueError as e:
+        # Missing BACKBOARD_API_KEY - agent service will be unavailable
+        print(f"Agent Service not initialized: {e}")
+        app.state.agent = None
+    except Exception as e:
+        print(f"Failed to initialize Agent Service: {e}")
+        app.state.agent = None
+    
     # Initialize SubscriptionManager
     from .manager import SubscriptionManager
     sub_manager = SubscriptionManager()
     
     # Define spawner function that routes to correct connector
-    def spawner(market_id: str):
+    async def spawner(market_id: str):
         market = state.get_market(market_id)
         if not market:
             print(f"Cannot spawn poller: Market {market_id} not found in state")
@@ -48,24 +67,14 @@ async def lifespan(app: FastAPI):
             return None
         
         if market.source == "polymarket":
-            return poly_connector.spawn_poller(market_id)
+            return await poly_connector.spawn_poller(market_id)
         elif market.source == "kalshi":
-            return kalshi_connector.spawn_poller(market_id)
+            return await kalshi_connector.spawn_poller(market_id)
         return None
 
     sub_manager.set_spawner(spawner)
 
-    # Initial fetch (Backgrounded so server starts immediately)
-    print("Starting background market fetch...")
-    async def fetch_all():
-        print("Fetching Polymarket data...")
-        await poly_connector.fetch_initial_markets()
-        print("Fetching Kalshi data...")
-        await kalshi_connector.fetch_initial_markets()
-        print("Market fetch complete.")
-        
-    asyncio.create_task(fetch_all())
-    print("Server startup complete. Markets loading in background.")
+    print("Server startup complete. Markets will load on-demand via search.")
     
     # Link StateManager to WS manager (Broadcast)
     # Note: Connectors call state.update_*, state calls us back.

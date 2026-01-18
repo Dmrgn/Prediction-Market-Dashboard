@@ -23,41 +23,6 @@ class KalshiConnector:
         self.state = state_manager
         self.client = httpx.AsyncClient(base_url=KALSHI_API_URL, timeout=30.0)
 
-    async def fetch_initial_markets(self):
-        """Initial cache: just first few pages for browsing"""
-        try:
-            total = 0
-            cursor = None
-            
-            for _ in range(5):  # 5 pages = ~5K markets
-                params = {"limit": 1000}
-                if cursor:
-                    params["cursor"] = cursor
-                
-                resp = await self.client.get("/markets", params=params)
-                if resp.status_code != 200:
-                    break
-                
-                data = resp.json()
-                markets = data.get("markets", [])
-                cursor = data.get("cursor")
-                
-                for item in markets:
-                    m = self.normalize_market(item)
-                    if m:
-                        self.state.update_market(m)
-                        total += 1
-                
-                if not cursor:
-                    break
-                await asyncio.sleep(0.1)
-            
-            print(f"[Kalshi] Initial load: {total} markets")
-            return total
-        except Exception as e:
-            print(f"[Kalshi] Error: {e}")
-            return 0
-
     async def search_markets(self, query: str) -> list[Market]:
         """
         Multi-step smart search:
@@ -102,7 +67,7 @@ class KalshiConnector:
             try:
                 cursor = None
                 pages_scanned = 0
-                max_pages = 10  # Limit to avoid long searches
+                max_pages = 5  # Limit to avoid long searches
                 
                 while pages_scanned < max_pages:
                     params = {"limit": 100}
@@ -186,12 +151,24 @@ class KalshiConnector:
             yes_ask = float(data.get("yes_ask", 0)) / 100.0 if data.get("yes_ask") else 0
             yes_price = (yes_bid + yes_ask) / 2 if yes_bid and yes_ask else yes_bid or yes_ask
             
+            # Get outcome names - ensure they're distinct
+            yes_name_raw = data.get("yes_sub_title", "")
+            no_name_raw = data.get("no_sub_title", "")
+            
+            # If both subtitles are the same or empty, use Yes/No
+            if not yes_name_raw or not no_name_raw or yes_name_raw == no_name_raw:
+                yes_name = "Yes"
+                no_name = "No"
+            else:
+                yes_name = yes_name_raw[:50]
+                no_name = no_name_raw[:50]
+            
             outcomes = [
                 Outcome(outcome_id=f"{market_ticker}_yes", 
-                        name=(data.get("yes_sub_title", "Yes") or "Yes")[:50], 
+                        name=yes_name, 
                         price=yes_price),
                 Outcome(outcome_id=f"{market_ticker}_no", 
-                        name=(data.get("no_sub_title", "No") or "No")[:50], 
+                        name=no_name, 
                         price=1.0 - yes_price if yes_price else 0)
             ]
 
