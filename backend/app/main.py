@@ -7,6 +7,7 @@ from .state import StateManager
 from .connectors.polymarket import PolymarketConnector
 from .connectors.kalshi import KalshiConnector
 from .ai.agent import AgentService
+from .ai.llm_service import LLMService
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -37,7 +38,7 @@ async def lifespan(app: FastAPI):
     app.state.poly = poly_connector
     app.state.kalshi = kalshi_connector
     
-    # Initialize Agent Service
+    # Initialize Agent Service (for chat)
     print("Initializing Agent Service...")
     try:
         agent_service = AgentService()
@@ -53,6 +54,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Failed to initialize Agent Service: {e}")
         app.state.agent = None
+    
+    # Initialize LLM Service (for parameter suggestions)
+    print("Initializing LLM Service...")
+    try:
+        llm_service = LLMService()
+        app.state.llm = llm_service
+        print(f"LLM Service initialized with model: {llm_service.model}")
+    except ValueError as e:
+        # Missing OPENROUTER_API_KEY - LLM service will be unavailable
+        print(f"LLM Service not initialized: {e}")
+        app.state.llm = None
+    except Exception as e:
+        print(f"Failed to initialize LLM Service: {e}")
+        app.state.llm = None
     
     # Initialize SubscriptionManager
     from .manager import SubscriptionManager

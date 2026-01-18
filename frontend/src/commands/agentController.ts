@@ -5,6 +5,8 @@
 
 import { COMMANDS, executeCommand, type CommandPayloads } from "./registry";
 
+const DEBUG_AGENT = "true";
+
 export type AgentEvent = {
   id: string;
   message: string;
@@ -21,6 +23,10 @@ export const agentController = {
   processInput: async (input: string): Promise<AgentEvent[]> => {
     const events: AgentEvent[] = [];
     events.push(createEvent(`Thought: analyzing "${input}"`));
+
+    if (DEBUG_AGENT) {
+      console.debug("[Agent Controller] input", input);
+    }
 
     if (input.toLowerCase().includes("news")) {
       events.push(createEvent("Action: opening news feed panel"));
@@ -40,6 +46,10 @@ export const agentController = {
       events.push(createEvent("Action: defaulting to market + news panels"));
       executeCommand(COMMANDS.QUERY_MARKET, { marketId: "demo-market" });
       events.push(createEvent("Observation: panels requested"));
+    }
+
+    if (DEBUG_AGENT) {
+      console.debug("[Agent Controller] events", events);
     }
 
     return events;

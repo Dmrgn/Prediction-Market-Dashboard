@@ -6,7 +6,7 @@
 
 import type { Article } from "@/lib/types/news";
 
-const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE_URL = "http://127.0.0.1:8000";
 const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws").replace(/\/$/, "") + "/ws";
 
 type Outcome = {
@@ -33,12 +33,12 @@ type Market = {
 type MarketSearchResponse = {
   markets: Market[],
   facets: {
-    sectors: Record<string, number>,
-    sources: { polymarket: 0, kalshi: 0 },
-    tags: Record<string, number>
-  },
-  total: number
-}
+    sectors: Record<string, number>;
+    sources: { polymarket: 0; kalshi: 0 };
+    tags: Record<string, number>;
+  };
+  total: number;
+};
 
 type QuotePoint = {
   ts: number;
@@ -316,6 +316,15 @@ class MarketSocketManager {
 
 const marketSocketManager = new MarketSocketManager();
 
+let agentSocket: WebSocket | null = null;
+
+const getAgentSocket = () => {
+  if (!agentSocket || agentSocket.readyState === WebSocket.CLOSED) {
+    agentSocket = new WebSocket(WS_BASE_URL);
+  }
+  return agentSocket;
+};
+
 const fetchJson = async <T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> => {
   const response = await fetch(input, init);
   if (!response.ok) {
@@ -508,6 +517,7 @@ export const backendInterface = {
     subscribeToOrderBook: (id: string, handler: (data: OrderBook) => void) =>
       marketSocketManager.subscribeToOrderBook(id, handler),
     unsubscribeFromMarket: (id: string) => marketSocketManager.unsubscribeFromMarket(id),
+    createAgentSocket: () => getAgentSocket(),
   },
 };
 

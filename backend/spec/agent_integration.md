@@ -41,7 +41,7 @@ class AgentService:
     
     def __init__(self):
         """Initialize the Backboard client."""
-        self.client = BackboardClient(api_key=os.getenv("BACKBOARD_API_KEY"))
+        self.client = BackboardClient(api_key=os.getenv("BACKBOARD"))
         self.assistant_id: Optional[str] = None
 
     async def initialize(self, assistant_id: Optional[str] = None):
@@ -345,7 +345,7 @@ async def lifespan(app: FastAPI):
 
 ```bash
 # Backboard API Configuration
-BACKBOARD_API_KEY=your_api_key_here
+BACKBOARD=your_api_key_here
 
 # Optional: Reuse existing assistant (recommended for production)
 BACKBOARD_ASSISTANT_ID=asst_your_assistant_id
@@ -470,7 +470,7 @@ Frontend should handle:
 - Consider logging/auditing agent interactions for compliance
 
 ### API Key Management
-- Store `BACKBOARD_API_KEY` securely in environment
+- Store `BACKBOARD` securely in environment
 - Never expose API key to frontend
 - Implement proper secret rotation procedures
 
@@ -519,7 +519,7 @@ Frontend should handle:
 
 ## 11. Production Deployment Checklist
 
-- [ ] Set `BACKBOARD_API_KEY` in production environment
+- [ ] Set `BACKBOARD` in production environment
 - [ ] Create production assistant and set `BACKBOARD_ASSISTANT_ID`
 - [ ] Implement user authentication on WebSocket endpoint
 - [ ] Add rate limiting for agent messages
