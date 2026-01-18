@@ -4,3 +4,4 @@ websockets
 uvicorn
 pydantic-settings
 python-dotenv
+backboard-sdk
