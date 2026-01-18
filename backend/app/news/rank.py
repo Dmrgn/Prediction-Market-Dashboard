@@ -1,218 +1,206 @@
 """
 News Ranking Module
 
-Handles scoring, sorting, deduplication, and prioritization of news articles.
+Simple, balanced ranking by relevance and recency.
+No source bias. No forced interleaving.
 """
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime, timezone
 import re
+import math
 
 from langdetect import detect, LangDetectException
 
-# Article type alias
 Article = Dict[str, object]
 
-# Source priority weights (higher = more priority)
-SOURCE_WEIGHTS = {
-    "gdelt2": 1.2,      # GDELT takes long to return, prioritize when available
-    "newsdata": 1.15,
-    "exa": 1.22,
-    "cpanic": 1.1,
-}
+STOP_WORDS = {"the", "a", "an", "is", "are", "was", "were", "be", "been", 
+              "have", "has", "had", "do", "does", "did", "will", "would",
+              "to", "of", "in", "for", "on", "with", "at", "by", "from",
+              "and", "or", "but", "not", "this", "that", "it", "its"}
 
-# Urgency keywords that boost score
-URGENCY_KEYWORDS = [
-    "breaking", "urgent", "alert", "just in", "developing",
-    "exclusive", "confirmed", "official", "announces", "surges",
-    "crashes", "plunges", "soars", "emergency", "critical",
-]
+# Configurable weights
+WEIGHT_RELEVANCE = 0.50
+WEIGHT_RECENCY = 0.35
+WEIGHT_QUALITY = 0.15
+
+# Recency decay
+RECENCY_HALF_LIFE_HOURS = 48
 
 
-def is_english_text(text: str) -> bool:
-    """
-    Uses langdetect library to detect if text is English.
-    Returns True only if the detected language is English.
-    """
+def tokenize(text: str) -> set:
+    """Extract meaningful terms from text."""
+    words = re.findall(r'\b[a-zA-Z]{2,}\b', text.lower())
+    return {w for w in words if w not in STOP_WORDS}
+
+
+def is_english(text: str) -> bool:
+    """Check if text is English using langdetect."""
     if not text or len(text.strip()) < 10:
-        return False
-    
+        return True  # Too short to detect, allow it
     try:
-        lang = detect(text)
-        return lang == "en"
+        return detect(text) == "en"
     except LangDetectException:
-        # If detection fails, fall back to ASCII check
-        ascii_count = sum(1 for c in text if ord(c) < 128)
-        return ascii_count / len(text) >= 0.95
+        return True  # Detection failed, allow it
 
 
-def filter_english_articles(articles: List[Article]) -> List[Article]:
-    """
-    Filter out articles with non-English titles.
-    """
-    return [
-        a for a in articles
-        if is_english_text(str(a.get("title", "")))
-    ]
-
-
-def parse_timestamp(ts: object) -> float:
-    """
-    Parse various timestamp formats to Unix timestamp.
-    Returns 0 if parsing fails.
-    """
+def parse_timestamp(ts) -> float:
+    """Parse various timestamp formats to Unix timestamp."""
     if ts is None:
         return 0.0
-    
     if isinstance(ts, (int, float)):
-        # Already a Unix timestamp
-        if ts > 1e12:  # Milliseconds
-            return ts / 1000
-        return float(ts)
-    
+        return ts / 1000 if ts > 1e12 else float(ts)
     if isinstance(ts, str):
-        # Try common formats
+        # Handle timezone suffixes
+        clean_ts = ts
+        if "+" in ts and ts.index("+") > 10:
+            clean_ts = ts[:ts.index("+")]
+        elif ts.endswith("Z"):
+            clean_ts = ts[:-1]
+        
         formats = [
-            "%Y-%m-%dT%H:%M:%S.%fZ",
-            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S.%f",
             "%Y-%m-%dT%H:%M:%S",
             "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%d",
         ]
         for fmt in formats:
             try:
-                dt = datetime.strptime(ts, fmt)
+                dt = datetime.strptime(clean_ts, fmt)
                 return dt.replace(tzinfo=timezone.utc).timestamp()
             except ValueError:
                 continue
-    
     return 0.0
 
 
-def calculate_recency_score(published_at: object, max_age_hours: float = 168) -> float:
-    """
-    Calculate recency score from 0 to 1.
-    Articles from now = 1.0, articles older than max_age_hours = 0.0
-    """
+def calculate_relevance(query: str, title: str, description: str = "") -> float:
+    """Score 0-1 based on query term matches in title."""
+    query_terms = tokenize(query)
+    if not query_terms:
+        return 0.5
+    
+    title_lower = title.lower()
+    title_terms = tokenize(title)
+    
+    # Term frequency
+    matches = sum(1 for t in query_terms if t in title_terms)
+    term_score = matches / len(query_terms)
+    
+    # Exact phrase bonus
+    phrase_bonus = 0.25 if query.lower() in title_lower else 0.0
+    
+    return min(term_score * 0.75 + phrase_bonus, 1.0)
+
+
+def calculate_recency(published_at) -> float:
+    """Score 0-1 using exponential decay, 48h half-life."""
     ts = parse_timestamp(published_at)
     if ts <= 0:
-        return 0.3  # Unknown timestamp gets middle-low score
+        return 0.3
     
     now = datetime.now(timezone.utc).timestamp()
-    age_hours = (now - ts) / 3600
+    age_hours = max((now - ts) / 3600, 0)
     
-    if age_hours < 0:
-        return 1.0  # Future date (likely timezone issue), treat as fresh
-    if age_hours > max_age_hours:
+    return math.pow(0.5, age_hours / RECENCY_HALF_LIFE_HOURS)
+
+
+def calculate_title_quality(title: str) -> float:
+    """Heuristic quality score for title."""
+    if not title:
         return 0.0
     
-    # Linear decay
-    return 1.0 - (age_hours / max_age_hours)
+    score = 1.0
+    
+    # Penalize ALL CAPS (clickbait)
+    if title.isupper():
+        score *= 0.6
+    
+    # Penalize very short titles
+    if len(title) < 15:
+        score *= 0.7
+    
+    # Penalize very long titles
+    if len(title) > 200:
+        score *= 0.8
+    
+    # Penalize excessive punctuation
+    if title.count("!") > 2:
+        score *= 0.8
+    if title.count("?") > 2:
+        score *= 0.9
+    
+    return score
 
 
-def calculate_urgency_score(title: str, description: str = "") -> float:
-    """
-    Calculate urgency score based on keywords in title/description.
-    Returns 0 to 1.
-    """
-    text = f"{title} {description or ''}".lower()
-    matches = sum(1 for kw in URGENCY_KEYWORDS if kw in text)
-    
-    # Cap at 3 matches for max score
-    return min(matches / 3.0, 1.0)
-
-
-def score_article(article: Article) -> float:
-    """
-    Calculate composite score for an article.
-    
-    Score = (recency * 0.4) + (source_weight * 0.35) + (urgency * 0.25)
-    """
-    source = str(article.get("source", "")).lower()
-    title = str(article.get("title", ""))
-    description = str(article.get("description", "") or "")
-    published_at = article.get("published_at")
-    
-    # Component scores
-    recency = calculate_recency_score(published_at)
-    source_weight = SOURCE_WEIGHTS.get(source, 1.0) / 1.5  # Normalize to 0-1
-    urgency = calculate_urgency_score(title, description)
-    
-    # Weighted composite
-    score = (recency * 0.4) + (source_weight * 0.35) + (urgency * 0.25)
-    
-    return round(score, 4)
-
-
-def deduplicate_articles(articles: List[Article]) -> List[Article]:
-    """
-    Remove duplicate articles based on URL or similar titles.
-    Keeps the highest-scored version.
-    """
-    seen_urls: set = set()
-    seen_titles: set = set()
-    unique: List[Article] = []
-    
-    for article in articles:
-        url = str(article.get("url", "")).lower().strip()
-        title = str(article.get("title", "")).lower().strip()
-        
-        # Normalize title for comparison (remove punctuation, extra spaces)
-        normalized_title = re.sub(r'[^\w\s]', '', title)
-        normalized_title = re.sub(r'\s+', ' ', normalized_title).strip()
-        
-        # Skip if we've seen this URL or very similar title
-        if url and url in seen_urls:
-            continue
-        if normalized_title and normalized_title in seen_titles:
-            continue
-        
-        if url:
-            seen_urls.add(url)
-        if normalized_title:
-            seen_titles.add(normalized_title)
-        
-        unique.append(article)
-    
+def deduplicate(articles: List[Article]) -> List[Article]:
+    """Remove duplicates by URL."""
+    seen = set()
+    unique = []
+    for a in articles:
+        url = str(a.get("url", "")).lower().strip()
+        if url and url not in seen:
+            seen.add(url)
+            unique.append(a)
+        elif not url:
+            unique.append(a)  # Keep articles without URLs
     return unique
 
 
 def rank_articles(
     articles: List[Article],
+    query: str = "",
     dedupe: bool = True,
-    limit: int | None = None,
-    english_only: bool = True,
+    limit: Optional[int] = None,
 ) -> List[Article]:
     """
-    Main ranking function.
+    Rank articles by relevance and recency.
     
-    1. Filter non-English articles
-    2. Score each article
-    3. Optionally deduplicate
-    4. Sort by score descending
-    5. Return top N results
+    Weights: Relevance 50%, Recency 35%, Quality 15%
+    
+    Args:
+        articles: List of article dicts from providers
+        query: User's search query for relevance scoring
+        dedupe: Remove duplicate articles by URL
+        limit: Maximum articles to return
+    
+    Returns:
+        Sorted list of articles with _score metadata
     """
     if not articles:
         return []
     
-    # Filter English-only
-    if english_only:
-        articles = filter_english_articles(articles)
+    # Filter non-English articles
+    articles = [a for a in articles if is_english(str(a.get("title", "")))]
     
-    # Score all articles
+    # Score each article
     scored = []
     for article in articles:
-        score = score_article(article)
-        scored.append({**article, "_score": score})
-    
-    # Deduplicate if requested
-    if dedupe:
-        scored = deduplicate_articles(scored)
+        title = str(article.get("title", ""))
+        desc = str(article.get("description", "") or "")
+        pub = article.get("published_at")
+        
+        rel = calculate_relevance(query, title, desc)
+        rec = calculate_recency(pub)
+        qual = calculate_title_quality(title)
+        
+        score = (rel * WEIGHT_RELEVANCE) + (rec * WEIGHT_RECENCY) + (qual * WEIGHT_QUALITY)
+        
+        scored.append({
+            **article,
+            "_score": round(score, 4),
+            "_relevance": round(rel, 4),
+            "_recency": round(rec, 4),
+            "_quality": round(qual, 4),
+        })
     
     # Sort by score descending
-    scored.sort(key=lambda a: a.get("_score", 0), reverse=True)
+    scored.sort(key=lambda a: a["_score"], reverse=True)
     
-    # Apply limit
+    # Deduplicate (after sorting so we keep highest-scored version)
+    if dedupe:
+        scored = deduplicate(scored)
+    
+    # Limit
     if limit:
         scored = scored[:limit]
     

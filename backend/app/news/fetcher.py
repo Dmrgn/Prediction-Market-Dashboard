@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 # Load .env before importing providers so API keys are available
-load_dotenv(Path(__file__).parent.parent.parent / ".env")
+load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
 
 from typing import List, Dict, Callable, Generator, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed

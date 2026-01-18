@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from .state import StateManager
 from .schemas import Market, OrderBook, QuotePoint
 from .news.fetcher import news_fetcher  # type: ignore
+from .news.rank import rank_articles
 
 router = APIRouter()
 state = StateManager()
@@ -21,7 +22,7 @@ async def search_markets(
     source: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-):
+):  
     """
     Advanced search with filters and relevance scoring.
     
@@ -329,18 +330,22 @@ async def search_news(
                 limit=limit,
             ):
                 accumulated.extend(articles)
+                # Rank and dedupe accumulated articles
+                ranked = rank_articles(accumulated, query=q, dedupe=True)
                 # Send update event
                 payload = {
                     "provider": provider,
-                    "articles": accumulated
+                    "articles": ranked
                 }
                 yield f"event: update\ndata: {json.dumps(payload)}\n\n"
                 await asyncio.sleep(0)  # Allow other tasks to run
             
+            # Final ranking pass
+            final_ranked = rank_articles(accumulated, query=q, dedupe=True)
             # Send done event
             final_payload = {
                 "provider": None,
-                "articles": accumulated
+                "articles": final_ranked
             }
             yield f"event: done\ndata: {json.dumps(final_payload)}\n\n"
         
@@ -352,5 +357,8 @@ async def search_news(
         query=q,
         limit=limit,
     )
+    
+    # Rank and dedupe
+    articles = rank_articles(articles, query=q, dedupe=True)
     
     return articles
