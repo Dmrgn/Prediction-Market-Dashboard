@@ -485,6 +485,7 @@ async def websocket_endpoint(websocket: WebSocket):
     
     # Agent state for this connection
     current_thread_id = None
+    current_agent_state = None  # For agentic workflow loop
 
     # Caching and rate limiting for suggestions
     suggestion_cache = SuggestionCache(ttl_seconds=30)
@@ -714,6 +715,156 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "error",
                         "error": f"Failed to generate suggestions: {str(e)}",
                         "request_id": data.get("request_id"),
+                    })
+
+            # ===== AGENTIC COMMAND RUNNER =====
+            
+            elif op == "agent_start":
+                """Start an agentic workflow with frontend-driven tool execution."""
+                if not agent_service:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "Agent service not available"
+                    })
+                    continue
+
+                try:
+                    prompt = data.get("prompt")
+                    commands = data.get("commands", [])
+                    
+                    if not prompt:
+                        await websocket.send_json({
+                            "type": "error",
+                            "error": "No prompt provided"
+                        })
+                        continue
+
+                    # Ensure thread exists
+                    if not current_thread_id:
+                        if not agent_service.assistant_id:
+                            await agent_service.initialize()
+                        thread = await agent_service.create_thread()
+                        current_thread_id = thread.thread_id
+
+                    if DEBUG_WS:
+                        print(f"[WebSocket] agent_start: prompt={prompt[:100]}... commands={len(commands)}")
+
+                    # Store agent state for this connection
+                    agent_state = {
+                        "prompt": prompt,
+                        "commands": commands,
+                        "all_observations": [],
+                    }
+                    
+                    # Get first step from agent
+                    step_result = await agent_service.run_agent_step(
+                        thread_id=current_thread_id,
+                        prompt=prompt,
+                        commands=commands,
+                        observations=None,
+                    )
+
+                    # Store state for continuation
+                    current_agent_state = agent_state
+
+                    await websocket.send_json({
+                        "type": "agent_step",
+                        "payload": {
+                            "reasoning": step_result.get("reasoning", ""),
+                            "actions": step_result.get("actions", []),
+                            "done": step_result.get("done", False),
+                            "model": "gemini",
+                        }
+                    })
+
+                    # If already done (error or empty), generate summary
+                    if step_result.get("done"):
+                        summary = await agent_service.generate_summary(
+                            thread_id=current_thread_id,
+                            prompt=prompt,
+                            all_observations=[],
+                        )
+                        await websocket.send_json({
+                            "type": "agent_complete",
+                            "payload": {
+                                "summary": summary,
+                                "model": "gpt",
+                            }
+                        })
+
+                except Exception as e:
+                    print(f"[WebSocket] agent_start error: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": f"Agent start failed: {str(e)}"
+                    })
+
+            elif op == "agent_observation":
+                """Receive command execution results and continue agent loop."""
+                if not agent_service:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "Agent service not available"
+                    })
+                    continue
+
+                try:
+                    results = data.get("results", [])
+                    
+                    # Get stored agent state
+                    if not current_agent_state:
+                        await websocket.send_json({
+                            "type": "error",
+                            "error": "No active agent session. Call agent_start first."
+                        })
+                        continue
+
+                    # Accumulate observations
+                    current_agent_state["all_observations"].extend(results)
+
+                    if DEBUG_WS:
+                        print(f"[WebSocket] agent_observation: {len(results)} results")
+
+                    # Get next step from agent
+                    step_result = await agent_service.run_agent_step(
+                        thread_id=current_thread_id,
+                        prompt=current_agent_state["prompt"],
+                        commands=current_agent_state["commands"],
+                        observations=results,
+                    )
+
+                    await websocket.send_json({
+                        "type": "agent_step",
+                        "payload": {
+                            "reasoning": step_result.get("reasoning", ""),
+                            "actions": step_result.get("actions", []),
+                            "done": step_result.get("done", False),
+                            "model": "gemini",
+                        }
+                    })
+
+                    # If done, generate summary with GPT
+                    if step_result.get("done"):
+                        summary = await agent_service.generate_summary(
+                            thread_id=current_thread_id,
+                            prompt=current_agent_state["prompt"],
+                            all_observations=current_agent_state["all_observations"],
+                        )
+                        await websocket.send_json({
+                            "type": "agent_complete",
+                            "payload": {
+                                "summary": summary,
+                                "model": "gpt",
+                            }
+                        })
+                        # Clear agent state
+                        current_agent_state = None
+
+                except Exception as e:
+                    print(f"[WebSocket] agent_observation error: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": f"Agent observation failed: {str(e)}"
                     })
             
             # ===== EXISTING MARKET OPERATIONS =====

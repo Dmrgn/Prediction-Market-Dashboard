@@ -116,9 +116,7 @@ export const executeCommand = (type: CommandType, data: CommandPayloads["data"])
   }
 };
 
-export const getCommandEntries = (
-  runAi: (prompt: string) => void
-): CommandEntry[] => {
+export const getCommandEntries = (): CommandEntry[] => {
   const layoutStore = useLayoutStore.getState();
   const profiles = layoutStore.profiles;
 
@@ -216,23 +214,7 @@ export const getCommandEntries = (
         });
       },
     },
-    {
-      id: "ai-run-agent",
-      type: COMMANDS.RUN_AI,
-      label: "AI: Run Agent",
-      description: "Execute the agent loop on a prompt",
-      closeOnRun: false,
-      params: [
-        {
-          name: "prompt",
-          label: "Prompt",
-          type: "text",
-          placeholder: "Find volatile markets and show news",
-          defaultValue: "",
-        },
-      ],
-      handler: (values) => runAi(values.prompt || "Show me the latest market news"),
-    },
+
     // Layout commands
     {
       id: "layout-optimize",

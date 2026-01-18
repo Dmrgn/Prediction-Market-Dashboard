@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { Search, Loader2, ChevronRight, Check } from "lucide-react";
 import { backendInterface, type Market, type Event, type EventSearchResult } from "@/backendInterface";
 import { Input } from "@/components/ui/input";
@@ -177,7 +178,7 @@ export function MarketSearchInput({ isOpen, onOpenChange, onSelect, placeholder 
 
     if (!isOpen) return null;
 
-    return (
+    const modalContent = (
         <div
             className="fixed inset-0 z-[60] flex items-start justify-center p-6"
             onKeyDown={handleKeyDown}
@@ -361,4 +362,6 @@ export function MarketSearchInput({ isOpen, onOpenChange, onSelect, placeholder 
             </div>
         </div>
     );
+
+    return createPortal(modalContent, document.body);
 }

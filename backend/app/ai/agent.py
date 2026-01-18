@@ -405,3 +405,207 @@ class AgentService:
         except Exception as error:
             print(f"[AgentService] Failed to parse suggestions: {error}")
             return {}
+
+    # ==================== AGENT LOOP ====================
+
+    # Model configuration for different phases
+    PLANNER_MODEL = "google/gemini-2.0-flash-001"
+    SUMMARY_MODEL = "openai/gpt-4o"
+
+    def _build_agent_system_prompt(self, commands: List[Dict]) -> str:
+        """Build system prompt with available commands for the agent."""
+        commands_desc = []
+        for cmd in commands:
+            params_desc = ""
+            if cmd.get("params"):
+                params_desc = ", ".join(
+                    f'{p["name"]}: {p.get("type", "text")}' 
+                    for p in cmd["params"]
+                )
+            commands_desc.append(
+                f"- {cmd['id']}: {cmd.get('description', cmd['label'])} "
+                f"(params: {params_desc or 'none'})"
+            )
+        
+        return f"""You are an AI agent that helps users build prediction market dashboards.
+
+AVAILABLE COMMANDS:
+{chr(10).join(commands_desc)}
+
+INSTRUCTIONS:
+1. Analyze the user's request
+2. Select which commands to execute to fulfill the request
+3. Return a JSON response with your plan
+
+CRITICAL RULES:
+- If the user asks for a specific market (e.g., "Bitcoin", "Trump"), you MUST use "search-markets" FIRST to find the correct Market ID.
+- STOP after searching. Do NOT try to open the panel in the same step. Wait for the search results to get the correct ID.
+- NEVER guess a market ID or use a placeholder like "Bitcoin Market ID".
+- After opening new panels, ALWAYS run "layout-optimize" to organize the dashboard.
+- Do NOT try to open a "RESEARCH" panel. Use "open-news-feed" instead.
+
+RESPONSE FORMAT:
+{{
+  "reasoning": "Brief explanation of your plan",
+  "actions": [
+    {{"command": "command-id", "params": {{"paramName": "value"}}}}
+  ],
+  "done": false
+}}
+
+When all actions are complete and you've received confirmation, respond with:
+{{
+  "reasoning": "Summary of what was accomplished", 
+  "actions": [],
+  "done": true
+}}
+
+Be concise. Prefer the query-market command when user wants a complete view of a market.
+Use optimize-layout after opening multiple panels."""
+
+    async def run_agent_step(
+        self,
+        thread_id: str,
+        prompt: str,
+        commands: List[Dict],
+        observations: Optional[List[Dict]] = None,
+    ) -> Dict:
+        """
+        Run a single step of the agent loop.
+        
+        Args:
+            thread_id: Backboard thread ID
+            prompt: User's original request
+            commands: Available commands from frontend
+            observations: Results from previous command executions
+            
+        Returns:
+            Dict with reasoning, actions, and done flag
+        """
+        if not self.assistant_id:
+            raise RuntimeError("Assistant not initialized. Call initialize() first.")
+
+        # Build the message content
+        if observations is None:
+            # First step - include system prompt and user request
+            system_prompt = self._build_agent_system_prompt(commands)
+            content = f"{system_prompt}\n\nUSER REQUEST: {prompt}"
+        else:
+            # Continuation - provide observation results
+            obs_text = json.dumps(observations, indent=2)
+            content = f"COMMAND RESULTS:\n{obs_text}\n\nContinue with the next actions, or respond with done=true if complete."
+
+        if DEBUG_AGENT:
+            print(f"[AgentService] Agent step with model: {self.PLANNER_MODEL}")
+            print(f"[AgentService] Content: {content[:500]}...")
+
+        # Call Backboard with the planner model
+        try:
+            response = await self.client.add_message(
+                thread_id=thread_id,
+                content=content,
+                memory="Auto",
+                stream=False,
+            )
+            
+            # Extract content from response
+            response_content = ""
+            if hasattr(response, 'content'):
+                response_content = str(response.content)
+            else:
+                response_content = str(response)
+            
+            if DEBUG_AGENT:
+                print(f"[AgentService] Raw response: {response_content}")
+
+            # Parse JSON from response
+            return self._parse_agent_response(response_content)
+
+        except Exception as e:
+            print(f"[AgentService] Agent step error: {e}")
+            return {
+                "reasoning": f"Error: {str(e)}",
+                "actions": [],
+                "done": True,
+                "error": str(e)
+            }
+
+    async def generate_summary(
+        self,
+        thread_id: str,
+        prompt: str,
+        all_observations: List[Dict],
+    ) -> str:
+        """
+        Generate a user-friendly summary using GPT.
+        
+        Args:
+            thread_id: Backboard thread ID
+            prompt: Original user request
+            all_observations: All command execution results
+            
+        Returns:
+            Formatted summary string
+        """
+        if not self.assistant_id:
+            raise RuntimeError("Assistant not initialized. Call initialize() first.")
+
+        summary_prompt = f"""The user requested: "{prompt}"
+
+Here's what was accomplished:
+{json.dumps(all_observations, indent=2)}
+
+Write a brief, friendly 1-2 sentence summary of what was done. 
+Be conversational and mention specific actions taken."""
+
+        if DEBUG_AGENT:
+            print(f"[AgentService] Generating summary with model: {self.SUMMARY_MODEL}")
+
+        try:
+            response = await self.client.add_message(
+                thread_id=thread_id,
+                content=summary_prompt,
+                memory="Auto",
+                stream=False,
+            )
+            
+            if hasattr(response, 'content'):
+                return str(response.content)
+            return str(response)
+
+        except Exception as e:
+            print(f"[AgentService] Summary generation error: {e}")
+            return "Completed your request."
+
+    def _parse_agent_response(self, response_content: str) -> Dict:
+        """Parse the agent's JSON response."""
+        try:
+            content = response_content.strip()
+            
+            # Extract JSON from markdown code blocks if present
+            if "```json" in content:
+                start = content.find("```json") + 7
+                end = content.find("```", start)
+                content = content[start:end].strip()
+            elif "```" in content:
+                start = content.find("```") + 3
+                end = content.find("```", start)
+                content = content[start:end].strip()
+
+            parsed = json.loads(content)
+            
+            return {
+                "reasoning": parsed.get("reasoning", ""),
+                "actions": parsed.get("actions", []),
+                "done": parsed.get("done", False),
+            }
+
+        except Exception as e:
+            print(f"[AgentService] Failed to parse agent response: {e}")
+            print(f"[AgentService] Raw content: {response_content}")
+            return {
+                "reasoning": "Failed to parse response",
+                "actions": [],
+                "done": True,
+                "error": str(e)
+            }
