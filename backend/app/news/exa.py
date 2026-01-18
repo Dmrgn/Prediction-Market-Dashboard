@@ -32,9 +32,9 @@ def fetch_exa(query: str, limit: int = 20, **kwargs) -> List[Dict]:
     return [
         {
             "source": "exa",
-            "title": item.get("title") or item.get("link", ""),
+            "title": item.get("title") or item.get("url", ""),
             "description": item.get("snippet"),
-            "url": item.get("link"),
+            "url": item.get("url"),
             "published_at": item.get("published_at"),
             "raw": item,
         }

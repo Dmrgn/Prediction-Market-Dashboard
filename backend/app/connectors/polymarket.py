@@ -18,115 +18,83 @@ class PolymarketConnector:
         self.gamma_client = httpx.AsyncClient(base_url=GAMMA_API_URL, timeout=30.0)
         self.clob_client = httpx.AsyncClient(base_url=CLOB_API_URL, timeout=30.0)
 
-    async def fetch_initial_markets(self):
-        """Fetch ALL active markets: sports via /sports, others via /events"""
-        # Run sports and events fetch in parallel
-        # Note: Event fetch might contain some sports, but unique IDs handle dupes in State
-        results = await asyncio.gather(
-            self._fetch_sports_markets(),
-            self._fetch_event_markets()
-        )
-        sports_count, events_count = results
-        total = sports_count + events_count
-        print(f"[Polymarket] Loaded {total} markets ({sports_count} sports, {events_count} events)")
-        return total
-
-    async def _fetch_sports_markets(self) -> int:
-        """Fetch sports markets using /sports metadata"""
-        try:
-            sports_resp = await self.gamma_client.get("/sports")
-            if sports_resp.status_code != 200:
-                print(f"[Polymarket] Failed to fetch /sports: {sports_resp.status_code}")
-                return 0
-            
-            sports = sports_resp.json()
-            total = 0
-            
-            for sport in sports:
-                series_id = sport.get("series")
-                sport_name = sport.get("sport", "").upper()
-                if not series_id:
-                    continue
-                
-                # Fetch events for this sport
-                events = await self._fetch_events_paginated(series_id=series_id)
-                
-                for event in events:
-                    for market_data in event.get("markets", []):
-                        m = self._normalize_event_market(market_data, event)
-                        if m:
-                            m.sector = "Sports"
-                            m.tags = [sport_name] if sport_name else ["Sports"]
-                            self.state.update_market(m)
-                            total += 1
-                
-                await asyncio.sleep(0.1)
-            
-            return total
-        except Exception as e:
-            print(f"[Polymarket] Error fetching sports markets: {e}")
-            return 0
-
-    async def _fetch_event_markets(self) -> int:
-        """Fetch non-sports markets using /events with native tags"""
-        try:
-            events = await self._fetch_events_paginated()
-            total = 0
-            
-            for event in events:
-                tags = event.get("tags", [])
-                sector = get_sector_from_pm_tags(tags)
-                tag_labels = extract_pm_tag_labels(tags)
-                
-                # Skip sports (handled by _fetch_sports_markets)
-                if sector == "Sports":
-                    continue
-                
-                for market_data in event.get("markets", []):
-                    m = self._normalize_event_market(market_data, event)
-                    if m:
-                        m.sector = sector
-                        m.tags = tag_labels
-                        self.state.update_market(m)
-                        total += 1
-            
-            return total
-        except Exception as e:
-            print(f"[Polymarket] Error fetching event markets: {e}")
-            return 0
-
-    async def _fetch_events_paginated(self, series_id: str = None) -> list:
-        """Paginated fetch of events"""
-        events = []
-        offset = 0
-        limit = 100
+    async def search_markets(self, query: str) -> list[Market]:
+        """
+        On-demand search for markets:
+        1. Check cache (instant)
+        2. Search events API for matches (progressive)
+        """
+        q_lower = query.lower()
+        results = []
         
-        while True:
-            params = {"closed": False, "limit": limit, "offset": offset}
-            if series_id:
-                params["series_id"] = series_id
-            
+        # === STEP 1: Check cache ===
+        cached = [
+            m for m in self.state.get_all_markets() 
+            if m.source == "polymarket" and (
+                q_lower in m.title.lower() or 
+                (m.description and q_lower in m.description.lower())
+            )
+        ]
+        if cached:
+            results.extend(cached)
+        
+        # === STEP 2: Search events API for new matches ===
+        if len(results) < 20:
             try:
-                resp = await self.gamma_client.get("/events", params=params)
-                if resp.status_code != 200:
-                    break
+                offset = 0
+                limit = 100
+                pages_scanned = 0
+                max_pages = 5  # Limit to avoid long searches
                 
-                data = resp.json()
-                if not data:
-                    break
-                
-                events.extend(data)
-                offset += len(data)
-                
-                if len(data) < limit:
-                    break
-                
-                await asyncio.sleep(0.1)
+                while pages_scanned < max_pages and len(results) < 20:
+                    params = {"closed": False, "limit": limit, "offset": offset}
+                    
+                    resp = await self.gamma_client.get("/events", params=params)
+                    if resp.status_code != 200:
+                        break
+                    
+                    data = resp.json()
+                    if not data:
+                        break
+                    
+                    pages_scanned += 1
+                    
+                    # Check each event for matches
+                    for event in data:
+                        title = event.get("title", "").lower()
+                        description = event.get("description", "").lower()
+                        
+                        if q_lower in title or q_lower in description:
+                            # Process markets in this event
+                            tags = event.get("tags", [])
+                            sector = get_sector_from_pm_tags(tags)
+                            tag_labels = extract_pm_tag_labels(tags)
+                            
+                            for market_data in event.get("markets", []):
+                                m = self._normalize_event_market(market_data, event)
+                                if m and m.market_id not in [r.market_id for r in results]:
+                                    m.sector = sector
+                                    m.tags = tag_labels
+                                    self.state.update_market(m)
+                                    results.append(m)
+                                    
+                                    if len(results) >= 50:
+                                        break
+                        
+                        if len(results) >= 50:
+                            break
+                    
+                    offset += len(data)
+                    
+                    if len(data) < limit:
+                        break
+                    
+                    await asyncio.sleep(0.05)
+                    
             except Exception as e:
-                print(f"[Polymarket] Pagination error: {e}")
-                break
+                print(f"[Polymarket] Search error: {e}")
         
-        return events
+        return results[:50]
 
     def _normalize_event_market(self, market_data: dict, event: dict = None) -> Market:
         """Convert Gamma API event market data to canonical Market schema"""
@@ -334,18 +302,6 @@ class PolymarketConnector:
                 print(f"[Polymarket] Error polling orderbook: {e}")
             
             await asyncio.sleep(0.1)
-
-    async def search_markets(self, query: str) -> list[Market]:
-        """Search for markets (uses cached data now)"""
-        # Search is now done against local cache in api.py
-        # This method is kept for backwards compatibility
-        q_lower = query.lower()
-        all_markets = self.state.get_all_markets()
-        results = [
-            m for m in all_markets 
-            if m.source == "polymarket" and q_lower in m.title.lower()
-        ]
-        return results[:50]
 
     async def fetch_price_history(self, token_id: str, interval: str = "1d") -> list[dict]:
         """
