@@ -186,12 +186,24 @@ class KalshiConnector:
             yes_ask = float(data.get("yes_ask", 0)) / 100.0 if data.get("yes_ask") else 0
             yes_price = (yes_bid + yes_ask) / 2 if yes_bid and yes_ask else yes_bid or yes_ask
             
+            # Get outcome names - ensure they're distinct
+            yes_name_raw = data.get("yes_sub_title", "")
+            no_name_raw = data.get("no_sub_title", "")
+            
+            # If both subtitles are the same or empty, use Yes/No
+            if not yes_name_raw or not no_name_raw or yes_name_raw == no_name_raw:
+                yes_name = "Yes"
+                no_name = "No"
+            else:
+                yes_name = yes_name_raw[:50]
+                no_name = no_name_raw[:50]
+            
             outcomes = [
                 Outcome(outcome_id=f"{market_ticker}_yes", 
-                        name=(data.get("yes_sub_title", "Yes") or "Yes")[:50], 
+                        name=yes_name, 
                         price=yes_price),
                 Outcome(outcome_id=f"{market_ticker}_no", 
-                        name=(data.get("no_sub_title", "No") or "No")[:50], 
+                        name=no_name, 
                         price=1.0 - yes_price if yes_price else 0)
             ]
 

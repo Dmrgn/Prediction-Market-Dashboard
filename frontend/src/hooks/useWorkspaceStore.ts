@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { StateCreator } from "zustand";
 
-export type PanelType = "MARKET_AGGREGATOR_GRAPH" | "NEWS_FEED";
+export type PanelType = "MARKET_AGGREGATOR_GRAPH" | "NEWS_FEED" | "CHART" | "ORDER_BOOK";
 
 export interface PanelInstance {
   id: string;
@@ -38,6 +38,14 @@ const defaultPanelData: Record<PanelType, Record<string, unknown>> = {
   MARKET_AGGREGATOR_GRAPH: {
     marketId: "demo-market",
     title: "Market Aggregator",
+  },
+  CHART: {
+    marketId: "demo-market",
+    title: "Chart",
+  },
+  ORDER_BOOK: {
+    marketId: "demo-market",
+    title: "Order Book",
   },
   NEWS_FEED: {
     query: "stock",

@@ -60,7 +60,9 @@ export const executeCommand = (type: CommandType, data: CommandPayloads["data"])
     }
     case COMMANDS.QUERY_MARKET: {
       const payload = data as CommandPayloads["data"] & { marketId: string };
-      store.openPanel("MARKET_AGGREGATOR_GRAPH", { marketId: payload.marketId });
+      // Backward compatibility: keep MARKET_AGGREGATOR_GRAPH check if needed, but we'll use CHART now.
+      store.openPanel("CHART", { marketId: payload.marketId });
+      store.openPanel("ORDER_BOOK", { marketId: payload.marketId });
       store.openPanel("NEWS_FEED", { query: payload.marketId });
       break;
     }
@@ -72,83 +74,83 @@ export const executeCommand = (type: CommandType, data: CommandPayloads["data"])
 export const getCommandEntries = (
   runAi: (prompt: string) => void
 ): CommandEntry[] => [
-  {
-    id: "open-market-aggregator",
-    type: COMMANDS.OPEN_PANEL,
-    label: "Open Market Aggregator",
-    description: "Add a market graph panel",
-    closeOnRun: true,
-    params: [
-      {
-        name: "marketId",
-        label: "Market",
-        type: "market",
-        placeholder: "Search markets",
-        defaultValue: "",
-      },
-    ],
-    handler: (values) =>
-      executeCommand(COMMANDS.OPEN_PANEL, {
-        panelType: "MARKET_AGGREGATOR_GRAPH",
-        panelData: { marketId: values.marketId || "demo-market" },
-      }),
-  },
-  {
-    id: "open-news-feed",
-    type: COMMANDS.OPEN_PANEL,
-    label: "Open News Feed",
-    description: "Add a market news panel",
-    closeOnRun: true,
-    params: [
-      {
-        name: "query",
-        label: "Query",
-        type: "text",
-        placeholder: "prediction markets",
-        defaultValue: "prediction markets",
-      },
-    ],
-    handler: (values) =>
-      executeCommand(COMMANDS.OPEN_PANEL, {
-        panelType: "NEWS_FEED",
-        panelData: { query: values.query || "prediction markets" },
-      }),
-  },
-  {
-    id: "query-market",
-    type: COMMANDS.QUERY_MARKET,
-    label: "Query Market",
-    description: "Open both market graph + news",
-    closeOnRun: true,
-    params: [
-      {
-        name: "marketId",
-        label: "Market",
-        type: "market",
-        placeholder: "Search markets",
-        defaultValue: "",
-      },
-    ],
-    handler: (values) =>
-      executeCommand(COMMANDS.QUERY_MARKET, {
-        marketId: values.marketId || "demo-market",
-      }),
-  },
-  {
-    id: "ai-run-agent",
-    type: COMMANDS.RUN_AI,
-    label: "AI: Run Agent",
-    description: "Execute the agent loop on a prompt",
-    closeOnRun: false,
-    params: [
-      {
-        name: "prompt",
-        label: "Prompt",
-        type: "text",
-        placeholder: "Find volatile markets and show news",
-        defaultValue: "Show me the latest market news",
-      },
-    ],
-    handler: (values) => runAi(values.prompt || "Show me the latest market news"),
-  },
-];
+    {
+      id: "open-chart",
+      type: COMMANDS.OPEN_PANEL,
+      label: "Open Chart",
+      description: "Add a price chart panel",
+      closeOnRun: true,
+      params: [
+        {
+          name: "marketId",
+          label: "Market",
+          type: "market",
+          placeholder: "Search markets",
+          defaultValue: "",
+        },
+      ],
+      handler: (values) =>
+        executeCommand(COMMANDS.OPEN_PANEL, {
+          panelType: "CHART",
+          panelData: { marketId: values.marketId || "demo-market" },
+        }),
+    },
+    {
+      id: "open-order-book",
+      type: COMMANDS.OPEN_PANEL,
+      label: "Open Order Book",
+      description: "Add an order book panel",
+      closeOnRun: true,
+      params: [
+        {
+          name: "marketId",
+          label: "Market",
+          type: "market",
+          placeholder: "Search markets",
+          defaultValue: "",
+        },
+      ],
+      handler: (values) =>
+        executeCommand(COMMANDS.OPEN_PANEL, {
+          panelType: "ORDER_BOOK",
+          panelData: { marketId: values.marketId || "demo-market" },
+        }),
+    },
+    {
+      id: "query-market",
+      type: COMMANDS.QUERY_MARKET,
+      label: "Query Market",
+      description: "Open Chart, Order Book + News",
+      closeOnRun: true,
+      params: [
+        {
+          name: "marketId",
+          label: "Market",
+          type: "market",
+          placeholder: "Search markets",
+          defaultValue: "",
+        },
+      ],
+      handler: (values) =>
+        executeCommand(COMMANDS.QUERY_MARKET, {
+          marketId: values.marketId || "demo-market",
+        }),
+    },
+    {
+      id: "ai-run-agent",
+      type: COMMANDS.RUN_AI,
+      label: "AI: Run Agent",
+      description: "Execute the agent loop on a prompt",
+      closeOnRun: false,
+      params: [
+        {
+          name: "prompt",
+          label: "Prompt",
+          type: "text",
+          placeholder: "Find volatile markets and show news",
+          defaultValue: "Show me the latest market news",
+        },
+      ],
+      handler: (values) => runAi(values.prompt || "Show me the latest market news"),
+    },
+  ];

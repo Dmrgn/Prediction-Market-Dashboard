@@ -239,13 +239,43 @@ class PolymarketConnector:
         """Creates a polling task for a single market"""
         async def _poll_loop():
             print(f"[Polymarket] Starting poll loop for {market_id}")
+            poll_count = 0
             while True:
                 market = self.state.get_market(market_id)
                 if market and market.source == "polymarket":
+                    # Poll current prices from Gamma API (more reliable)
+                    await self.poll_market_price(market_id)
+                    
+                    # Also poll orderbook (for OrderBookPanel)
                     await self.poll_orderbook(market_id)
-                await asyncio.sleep(1.0)
+                    
+                poll_count += 1
+                await asyncio.sleep(2.0)  # Poll every 2 seconds
         
         return asyncio.create_task(_poll_loop())
+
+    async def poll_market_price(self, market_id: str):
+        """Poll current prices from Gamma API"""
+        try:
+            # Fetch market data from Gamma API using conditionId
+            resp = await self.gamma_client.get("/markets", params={"condition_ids": market_id})
+            if resp.status_code == 200:
+                markets = resp.json()
+                if markets and len(markets) > 0:
+                    market_data = markets[0]
+                    
+                    # Parse outcome prices
+                    outcome_prices = json.loads(market_data.get("outcomePrices", "[]"))
+                    clob_tokens = json.loads(market_data.get("clobTokenIds", "[]"))
+                    
+                    for i, token_id in enumerate(clob_tokens):
+                        if i < len(outcome_prices):
+                            price = float(outcome_prices[i])
+                            # Update quote with current price
+                            self.state.update_quote(market_id, token_id, price, price, price)
+                            
+        except Exception as e:
+            print(f"[Polymarket] Error polling market price: {e}")
 
     async def poll_orderbook(self, market_id: str):
         """Poll orderbook for each outcome (token) in a market"""
@@ -256,7 +286,8 @@ class PolymarketConnector:
         for outcome in market.outcomes:
             token_id = outcome.outcome_id
             
-            if not token_id.isdigit():
+            # Token IDs should be numeric strings (Polymarket CLOB tokens)
+            if not token_id or len(token_id) < 10:
                 continue
                 
             try:
@@ -266,20 +297,25 @@ class PolymarketConnector:
                     
                     bids = []
                     for x in data.get("bids", []):
-                        bids.append(OrderBookLevel(
-                            p=float(x.get("price", x[0]) if isinstance(x, list) else x.get("price", 0)),
-                            s=float(x.get("size", x[1]) if isinstance(x, list) else x.get("size", 0))
-                        ))
+                        price = float(x.get("price", 0)) if isinstance(x, dict) else float(x[0]) if x else 0
+                        size = float(x.get("size", 0)) if isinstance(x, dict) else float(x[1]) if len(x) > 1 else 0
+                        if price > 0:
+                            bids.append(OrderBookLevel(p=price, s=size))
                     
                     asks = []
                     for x in data.get("asks", []):
-                        asks.append(OrderBookLevel(
-                            p=float(x.get("price", x[0]) if isinstance(x, list) else x.get("price", 0)),
-                            s=float(x.get("size", x[1]) if isinstance(x, list) else x.get("size", 0))
-                        ))
+                        price = float(x.get("price", 0)) if isinstance(x, dict) else float(x[0]) if x else 0
+                        size = float(x.get("size", 0)) if isinstance(x, dict) else float(x[1]) if len(x) > 1 else 0
+                        if price > 0:
+                            asks.append(OrderBookLevel(p=price, s=size))
+                    
+                    # Sort: bids DESC (highest first), asks ASC (lowest first)
+                    bids.sort(key=lambda x: x.p, reverse=True)
+                    asks.sort(key=lambda x: x.p)
                     
                     self.state.update_orderbook(market_id, outcome.outcome_id, bids, asks)
 
+                    # Calculate mid price
                     if bids and asks:
                         best_bid = bids[0].p
                         best_ask = asks[0].p
@@ -291,9 +327,11 @@ class PolymarketConnector:
                     elif asks:
                         best_ask = asks[0].p
                         self.state.update_quote(market_id, outcome.outcome_id, best_ask, best_ask, best_ask)
+                else:
+                    print(f"[Polymarket] Orderbook fetch failed for {token_id}: {resp.status_code}")
                         
             except Exception as e:
-                pass
+                print(f"[Polymarket] Error polling orderbook: {e}")
             
             await asyncio.sleep(0.1)
 
@@ -308,3 +346,44 @@ class PolymarketConnector:
             if m.source == "polymarket" and q_lower in m.title.lower()
         ]
         return results[:50]
+
+    async def fetch_price_history(self, token_id: str, interval: str = "1d") -> list[dict]:
+        """
+        Fetch historical price data from Polymarket CLOB API.
+        
+        Args:
+            token_id: The CLOB token ID (outcome_id)
+            interval: Time interval - '1h', '6h', '1d', '1w', '1m', or 'max'
+        
+        Returns:
+            List of {t: timestamp, p: price} objects
+        """
+        try:
+            # Map our intervals to Polymarket's format
+            interval_map = {
+                "1H": "1h",
+                "6H": "6h", 
+                "1D": "1d",
+                "5D": "1d",  # 5 days = use 1d fidelity
+                "1W": "1w",
+                "1M": "1m",
+                "ALL": "max"
+            }
+            pm_interval = interval_map.get(interval.upper(), "1d")
+            
+            resp = await self.clob_client.get("/prices-history", params={
+                "market": token_id,
+                "interval": pm_interval,
+                "fidelity": 60  # 60 minute fidelity for cleaner data
+            })
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                history = data.get("history", [])
+                return history
+            else:
+                print(f"[Polymarket] Price history failed: {resp.status_code}")
+                return []
+        except Exception as e:
+            print(f"[Polymarket] Error fetching price history: {e}")
+            return []
