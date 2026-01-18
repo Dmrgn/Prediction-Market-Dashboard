@@ -21,11 +21,11 @@ STOP_WORDS = {"the", "a", "an", "is", "are", "was", "were", "be", "been",
 
 # Configurable weights
 WEIGHT_RELEVANCE = 0.50
-WEIGHT_RECENCY = 0.35
-WEIGHT_QUALITY = 0.15
+WEIGHT_RECENCY = 0.30
+WEIGHT_QUALITY = 0.20
 
-# Recency decay
-RECENCY_HALF_LIFE_HOURS = 48
+# Recency decay - increased half-life to allow older articles
+RECENCY_HALF_LIFE_HOURS = 72
 
 
 def tokenize(text: str) -> set:

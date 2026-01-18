@@ -122,6 +122,18 @@ type EventSearchResult = {
   total: number;
 };
 
+type SentimentReport = {
+  market_id: string;
+  query: string;
+  score: number;
+  signal: "bullish" | "bearish" | "neutral";
+  summary: string;
+  articles_analyzed: number;
+  top_positive: string[];
+  top_negative: string[];
+  generated_at: string;
+};
+
 type NewsSearchParams = {
   query: string;
   providers?: string[];
@@ -355,6 +367,9 @@ export const backendInterface = {
   searchEvents: async (query: string, source?: "polymarket" | "kalshi"): Promise<EventSearchResult> =>
     fetchJson<EventSearchResult>(buildUrl("/events/search", { q: query, source })),
 
+  fetchSentiment: async (marketId: string, query?: string): Promise<SentimentReport> =>
+    fetchJson<SentimentReport>(buildUrl(`/markets/${marketId}/sentiment`, { q: query })),
+
   fetchMarket: async (id: string): Promise<Market> => {
     if (!id) throw new Error("Market ID is required");
     return fetchJson<Market>(buildUrl(`/markets/${id}`));
@@ -534,5 +549,6 @@ export type {
   Outcome,
   OutcomeInfo,
   QuotePoint,
+  SentimentReport,
   TimeRange,
 };
