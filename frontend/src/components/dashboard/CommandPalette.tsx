@@ -52,6 +52,7 @@ const createEmptySubPalette = (): SubPaletteState => ({
   paramIndex: 0,
 });
 
+
 export function CommandPalette() {
   const { isCommandPaletteOpen: isOpen, closeCommandPalette: onClose, initialCommandId, initialParams, openSidebar } = useUIStore();
   const { events: agentEvents, addEvents } = useAgentStore();
