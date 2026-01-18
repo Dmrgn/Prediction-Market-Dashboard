@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     sub_manager = SubscriptionManager()
     
     # Define spawner function that routes to correct connector
-    def spawner(market_id: str):
+    async def spawner(market_id: str):
         market = state.get_market(market_id)
         if not market:
             print(f"Cannot spawn poller: Market {market_id} not found in state")
@@ -48,9 +48,9 @@ async def lifespan(app: FastAPI):
             return None
         
         if market.source == "polymarket":
-            return poly_connector.spawn_poller(market_id)
+            return await poly_connector.spawn_poller(market_id)
         elif market.source == "kalshi":
-            return kalshi_connector.spawn_poller(market_id)
+            return await kalshi_connector.spawn_poller(market_id)
         return None
 
     sub_manager.set_spawner(spawner)

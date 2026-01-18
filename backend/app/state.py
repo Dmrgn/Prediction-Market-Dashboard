@@ -79,12 +79,35 @@ class StateManager:
         )
         return msg
 
-    def get_history(self, market_id: str, outcome_id: str) -> List[QuotePoint]:
+    def get_history(self, market_id: str, outcome_id: str, range_seconds: int = None) -> List[QuotePoint]:
         key = f"{market_id}:{outcome_id}"
-        if key in self.quote_history:
-            return list(self.quote_history[key])
-        return []
+        if key not in self.quote_history:
+            return []
+        
+        points = list(self.quote_history[key])
+        
+        # Apply time range filter if specified
+        if range_seconds is not None and range_seconds > 0:
+            cutoff = time.time() - range_seconds
+            points = [p for p in points if p.ts >= cutoff]
+        
+        return points
+
+    def get_all_outcomes_history(self, market_id: str, range_seconds: int = None) -> Dict[str, List[QuotePoint]]:
+        """Get history for ALL outcomes in a market, keyed by outcome_id"""
+        market = self.get_market(market_id)
+        if not market:
+            return {}
+        
+        result = {}
+        for outcome in market.outcomes:
+            history = self.get_history(market_id, outcome.outcome_id, range_seconds)
+            if history:
+                result[outcome.outcome_id] = history
+        
+        return result
 
     def get_orderbook(self, market_id: str, outcome_id: str) -> Optional[OrderBook]:
         key = f"{market_id}:{outcome_id}"
         return self.latest_orderbooks.get(key)
+

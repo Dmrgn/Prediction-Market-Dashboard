@@ -1,5 +1,6 @@
 import type { PanelInstance } from "@/hooks/useWorkspaceStore";
-import { MarketAggregatorPanel } from "@/components/panels/MarketAggregatorPanel";
+import { ChartPanel } from "@/components/panels/ChartPanel";
+import { OrderBookPanel } from "@/components/panels/OrderBookPanel";
 import { NewsFeedPanel } from "@/components/panels/NewsFeedPanel";
 import { PanelWrapper } from "@/components/panels/PanelWrapper";
 
@@ -9,10 +10,17 @@ interface PanelRegistryProps {
 
 export function PanelRegistry({ panel }: PanelRegistryProps) {
   switch (panel.type) {
-    case "MARKET_AGGREGATOR_GRAPH":
+    case "CHART":
+    case "MARKET_AGGREGATOR_GRAPH": // Backward compatibility
       return (
         <PanelWrapper panel={panel}>
-          <MarketAggregatorPanel panel={panel} />
+          <ChartPanel panel={panel} />
+        </PanelWrapper>
+      );
+    case "ORDER_BOOK":
+      return (
+        <PanelWrapper panel={panel}>
+          <OrderBookPanel panel={panel} />
         </PanelWrapper>
       );
     case "NEWS_FEED":
