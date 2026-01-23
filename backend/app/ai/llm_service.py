@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from ..state import StateManager
 
-DEBUG_LLM = True
+DEBUG_LLM = False
 
 
 class CommandExecution:
@@ -57,7 +57,7 @@ class LLMService:
             raise ValueError("OPENROUTER_API_KEY environment variable is required")
         
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.model = "openai/gpt-oss-120b:turbo"
+        self.model = "google/gemini-2.0-flash-001"  # Upgraded for better instruction following
         
         # Global command history (last 15 commands across all users)
         self.command_history: deque[CommandExecution] = deque(maxlen=15)
@@ -65,6 +65,59 @@ class LLMService:
         
         if DEBUG_LLM:
             print(f"[LLMService] Initialized with model: {self.model}")
+    
+    def _robust_json_parse(self, content: str) -> dict | list | None:
+        """
+        Robustly parse JSON from LLM output, handling common issues:
+        - Markdown code blocks (```json ... ```)
+        - Trailing text after JSON
+        - Leading/trailing whitespace
+        """
+        import re
+        
+        text = content.strip()
+        
+        # Try to extract JSON from markdown code blocks
+        json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+        if json_match:
+            text = json_match.group(1).strip()
+        
+        # Try to find JSON object or array boundaries
+        if not text.startswith(('{', '[')):
+            # Look for first { or [
+            for i, char in enumerate(text):
+                if char in '{[':
+                    text = text[i:]
+                    break
+        
+        # Try to find the end of the JSON
+        if text.startswith('{'):
+            depth = 0
+            for i, char in enumerate(text):
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        text = text[:i+1]
+                        break
+        elif text.startswith('['):
+            depth = 0
+            for i, char in enumerate(text):
+                if char == '[':
+                    depth += 1
+                elif char == ']':
+                    depth -= 1
+                    if depth == 0:
+                        text = text[:i+1]
+                        break
+        
+        try:
+            return json.loads(text)
+        except Exception as e:
+            if DEBUG_LLM:
+                print(f"[LLMService] JSON parse failed: {e}")
+            return None
     
     async def track_execution(
         self,
@@ -439,12 +492,11 @@ class LLMService:
                 print(f"[LLMService] Extracting keywords with LLM for {command_id}")
             
             response = await self._call_openrouter(prompt)
-            content = response.strip().replace("```json", "").replace("```", "").strip()
             
             if DEBUG_LLM:
-                print(f"[LLMService] Keyword extraction response: {content}")
+                print(f"[LLMService] Keyword extraction response: {response}")
             
-            keywords = json.loads(content)
+            keywords = self._robust_json_parse(response)
             
             if isinstance(keywords, list):
                 extracted = [str(k) for k in keywords[:8]]  # Max 8 keywords
@@ -472,35 +524,21 @@ class LLMService:
         Returns:
             Structured suggestion dictionary
         """
-        try:
-            # Extract JSON from response (might be in code blocks)
-            content = response_content.strip()
-            
-            if "```json" in content:
-                start = content.find("```json") + 7
-                end = content.find("```", start)
-                content = content[start:end].strip()
-            elif "```" in content:
-                start = content.find("```") + 3
-                end = content.find("```", start)
-                content = content[start:end].strip()
-            
-            # Parse JSON
-            suggestions = json.loads(content)
-            
-            # Validate structure
-            validated_suggestions = {}
-            if isinstance(suggestions, dict):
-                for param_name, suggestion in suggestions.items():
-                    if isinstance(suggestion, dict) and suggestion.get("type") in ["direct", "market_list"]:
-                        validated_suggestions[param_name] = suggestion
-            
-            return validated_suggestions
-            
-        except Exception as e:
+        # Use robust parser
+        suggestions = self._robust_json_parse(response_content)
+        
+        if not isinstance(suggestions, dict):
             if DEBUG_LLM:
-                print(f"[LLMService] Failed to parse suggestions: {e}")
+                print(f"[LLMService] Suggestions not a dict: {type(suggestions)}")
             return {}
+        
+        # Validate structure
+        validated_suggestions = {}
+        for param_name, suggestion in suggestions.items():
+            if isinstance(suggestion, dict) and suggestion.get("type") in ["direct", "market_list"]:
+                validated_suggestions[param_name] = suggestion
+        
+        return validated_suggestions
     
     async def generate_market_search_queries(self, title: str, target_platform: str) -> List[str]:
         """

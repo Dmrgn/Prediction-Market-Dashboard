@@ -1,7 +1,8 @@
 # Prediction Market Dashboard - API Documentation
 
 ## Base URL
-```
+
+```md
 http://localhost:8000
 ```
 
@@ -13,7 +14,7 @@ http://localhost:8000
 
 Search and filter markets across Polymarket and Kalshi with **on-demand loading**.
 
-**🔄 On-Demand Behavior:**
+**On-Demand Behavior:**
 - Markets are NOT pre-loaded at startup
 - First search for a term queries APIs directly (may take 1-3 seconds)
 - Results are progressively cached

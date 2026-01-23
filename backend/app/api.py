@@ -16,7 +16,7 @@ from .search_helper import search_markets as search_markets_helper
 from .services.researcher import research_market, ResearchReport
 from .ai.llm_service import LLMService
 
-DEBUG_WS = True
+DEBUG_WS = False
 
 # LLM Service singleton for researcher
 _llm_service: Optional[LLMService] = None

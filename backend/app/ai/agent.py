@@ -24,6 +24,55 @@ class AgentService:
         
         self.client = BackboardClient(api_key=api_key)
         self.assistant_id: Optional[str] = None
+    
+    def _robust_json_parse(self, content: str) -> dict | list | None:
+        """
+        Robustly parse JSON from LLM output, handling common issues.
+        """
+        import re
+        
+        text = content.strip()
+        
+        # Try to extract JSON from markdown code blocks
+        json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+        if json_match:
+            text = json_match.group(1).strip()
+        
+        # Try to find JSON object or array boundaries
+        if not text.startswith(('{', '[')):
+            for i, char in enumerate(text):
+                if char in '{[':
+                    text = text[i:]
+                    break
+        
+        # Try to find the end of the JSON
+        if text.startswith('{'):
+            depth = 0
+            for i, char in enumerate(text):
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        text = text[:i+1]
+                        break
+        elif text.startswith('['):
+            depth = 0
+            for i, char in enumerate(text):
+                if char == '[':
+                    depth += 1
+                elif char == ']':
+                    depth -= 1
+                    if depth == 0:
+                        text = text[:i+1]
+                        break
+        
+        try:
+            return json.loads(text)
+        except Exception as e:
+            if DEBUG_AGENT:
+                print(f"[AgentService] JSON parse failed: {e}")
+            return None
 
     async def initialize(self, assistant_id: Optional[str] = None):
         """
@@ -641,34 +690,22 @@ Be conversational and mention specific actions taken."""
             return "Completed your request."
 
     def _parse_agent_response(self, response_content: str) -> Dict:
-        """Parse the agent's JSON response."""
-        try:
-            content = response_content.strip()
-            
-            # Extract JSON from markdown code blocks if present
-            if "```json" in content:
-                start = content.find("```json") + 7
-                end = content.find("```", start)
-                content = content[start:end].strip()
-            elif "```" in content:
-                start = content.find("```") + 3
-                end = content.find("```", start)
-                content = content[start:end].strip()
-
-            parsed = json.loads(content)
-            
-            return {
-                "reasoning": parsed.get("reasoning", ""),
-                "actions": parsed.get("actions", []),
-                "done": parsed.get("done", False),
-            }
-
-        except Exception as e:
-            print(f"[AgentService] Failed to parse agent response: {e}")
-            print(f"[AgentService] Raw content: {response_content}")
+        """Parse the agent's JSON response using robust parsing."""
+        parsed = self._robust_json_parse(response_content)
+        
+        if not isinstance(parsed, dict):
+            if DEBUG_AGENT:
+                print(f"[AgentService] Failed to parse agent response as dict")
+                print(f"[AgentService] Raw content: {response_content}")
             return {
                 "reasoning": "Failed to parse response",
                 "actions": [],
                 "done": True,
-                "error": str(e)
+                "error": "Invalid JSON response"
             }
+        
+        return {
+            "reasoning": parsed.get("reasoning", ""),
+            "actions": parsed.get("actions", []),
+            "done": parsed.get("done", False),
+        }

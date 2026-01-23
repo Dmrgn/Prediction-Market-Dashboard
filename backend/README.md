@@ -1,4 +1,4 @@
-# Antigravity API Documentation
+# OddsBase API Documentation
 
 This backend aggregates prediction market data from **Polymarket** and **Kalshi** into a unified, real-time API. It is designed to power a professional "Bloomberg-style" terminal.
 
@@ -157,14 +157,11 @@ To show a unified view of "Trump 2024":
 
 ```bash
 # Verify WebSocket streaming
-python3 verify_ws.py
+python3 tests/verify_ws.py
 
 # Check markets loaded
 curl http://localhost:8000/markets | python3 -c "import sys, json; print(f'Loaded {len(json.load(sys.stdin))} markets')"
 
-# Test orderbook
-curl "http://localhost:8000/markets?source=kalshi" | python3 -c "
-import sys, json
-m = json.load(sys.stdin)[0]
-print(f'Market: {m[\"market_id\"]}')"
+# Run all tests (requires pytest)
+uv run pytest tests/
 ```

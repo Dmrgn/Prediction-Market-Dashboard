@@ -7,7 +7,7 @@ import { ResearcherPanel } from "@/components/dashboard/ResearcherPanel";
 import { useUIStore } from "@/hooks/useUIStore";
 import { Kbd } from "./components/ui/kbd";
 
-import logo from "./OddsBaseLogo.webp";
+import logo from "../public/Logo.webp";
 
 import {
   Sidebar,
